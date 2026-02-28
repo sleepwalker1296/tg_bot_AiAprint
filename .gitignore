@@ -1,7 +1,15 @@
 # Python
-*.pyc
-__pycache__/
+*.py[cod]
+*.pyo
 
 # Environment
 .env
-*.env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Sensitive Data
+secrets.yaml
+secrets.yml
