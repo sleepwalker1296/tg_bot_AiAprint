@@ -17,6 +17,7 @@ AI_PROVIDER: str = os.getenv("AI_PROVIDER", "openai")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 STABILITY_API_KEY: str = os.getenv("STABILITY_API_KEY", "")
 REPLICATE_API_TOKEN: str = os.getenv("REPLICATE_API_TOKEN", "")
+KIE_AI_API_KEY: str = os.getenv("KIE_AI_API_KEY", "")
 
 # Промпт для генерации дизайна футболки
 AI_PROMPT_TEMPLATE = (
@@ -67,4 +68,6 @@ def validate_config() -> list[str]:
         errors.append("OPENAI_API_KEY не задан (AI_PROVIDER=openai)")
     if AI_PROVIDER == "stability" and not STABILITY_API_KEY:
         errors.append("STABILITY_API_KEY не задан (AI_PROVIDER=stability)")
+    if AI_PROVIDER == "kieai" and not KIE_AI_API_KEY:
+        errors.append("KIE_AI_API_KEY не задан (AI_PROVIDER=kieai)")
     return errors

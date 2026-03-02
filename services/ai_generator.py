@@ -1,6 +1,6 @@
 """
 Генерация дизайна принта для футболки через AI API.
-Поддерживает: OpenAI DALL-E 3, Stability AI, Replicate.
+Поддерживает: OpenAI DALL-E 3, Stability AI, Replicate, KIE.AI Nano Banana 2.
 """
 import base64
 import io
@@ -20,9 +20,10 @@ class AIGenerationError(Exception):
 class AIGenerator:
     """Генерирует дизайн принта на основе фото автомобиля."""
 
-    async def generate(self, source_image_path: Path) -> bytes:
+    async def generate(self, source_image_path: Path, source_image_url: str = "") -> bytes:
         """
         Принимает путь к оригинальному фото.
+        source_image_url — публичный URL для провайдеров, которым нужен URL (kieai).
         Возвращает байты PNG-изображения дизайна.
         """
         provider = config.AI_PROVIDER.lower()
@@ -34,6 +35,8 @@ class AIGenerator:
             return await self._generate_stability(source_image_path)
         elif provider == "replicate":
             return await self._generate_replicate(source_image_path)
+        elif provider == "kieai":
+            return await self._generate_kieai(source_image_url)
         else:
             raise AIGenerationError(f"Неизвестный AI_PROVIDER: {provider}")
 
@@ -191,3 +194,100 @@ class AIGenerator:
 
         logger.info("Replicate generation completed")
         return response.content
+
+    # ------------------------------------------------------------------
+    # KIE.AI Nano Banana 2 (image-to-image + polling)
+    # ------------------------------------------------------------------
+
+    async def _generate_kieai(self, source_image_url: str) -> bytes:
+        """
+        Генерация через KIE.AI Nano Banana 2.
+        Создаёт задачу и опрашивает статус каждые 5 сек (до 5 минут).
+        source_image_url — публичный URL исходного изображения.
+        """
+        import asyncio
+        import json as _json
+
+        if not source_image_url:
+            raise AIGenerationError(
+                "KIE.AI: не передан source_image_url. "
+                "Убедитесь, что AI_PROVIDER=kieai и фото загружается через Telegram."
+            )
+
+        prompt = (
+            "Transform this car photo into a bold artistic t-shirt print design. "
+            "Style: graphic art illustration, high contrast, vivid colors, "
+            "suitable for DTF printing. White background, no text, no watermarks."
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.KIE_AI_API_KEY}",
+        }
+        payload = {
+            "model": "nano-banana-2",
+            "input": {
+                "prompt": prompt,
+                "image_input": [source_image_url],
+                "aspect_ratio": "1:1",
+                "resolution": "1K",
+                "output_format": "jpg",
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.kie.ai/api/v1/jobs/createTask",
+                headers=headers,
+                json=payload,
+            )
+            if resp.status_code != 200:
+                raise AIGenerationError(f"KIE.AI createTask error {resp.status_code}: {resp.text}")
+            data = resp.json()
+
+        task_id = data.get("data", {}).get("taskId")
+        if not task_id:
+            raise AIGenerationError(f"KIE.AI: не получен taskId. Ответ: {data}")
+
+        logger.info("KIE.AI task created: {}", task_id)
+
+        # Polling: каждые 5 сек, максимум 5 минут
+        poll_headers = {"Authorization": f"Bearer {config.KIE_AI_API_KEY}"}
+        max_wait = 300
+        interval = 5
+        elapsed = 0
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            while elapsed < max_wait:
+                await asyncio.sleep(interval)
+                elapsed += interval
+
+                poll_resp = await client.get(
+                    f"https://api.kie.ai/api/v1/jobs/getTask/{task_id}",
+                    headers=poll_headers,
+                )
+                if poll_resp.status_code != 200:
+                    logger.warning("KIE.AI poll error {}: {}", poll_resp.status_code, poll_resp.text)
+                    continue
+
+                task = poll_resp.json().get("data", {})
+                state = task.get("state", "")
+                logger.debug("KIE.AI task {} state={}, elapsed={}s", task_id, state, elapsed)
+
+                if state == "success":
+                    result_json_str = task.get("resultJson", "{}")
+                    result = _json.loads(result_json_str)
+                    urls = result.get("resultUrls", [])
+                    if not urls:
+                        raise AIGenerationError("KIE.AI: задача завершена, но resultUrls пуст.")
+
+                    img_resp = await client.get(urls[0])
+                    img_resp.raise_for_status()
+                    logger.info("KIE.AI generation completed, {} bytes", len(img_resp.content))
+                    return img_resp.content
+
+                elif state in ("failed", "cancelled", "error"):
+                    fail_msg = task.get("failMsg") or "неизвестная ошибка"
+                    raise AIGenerationError(f"KIE.AI: задача провалилась ({state}): {fail_msg}")
+
+        raise AIGenerationError("KIE.AI: таймаут ожидания результата (5 минут).")

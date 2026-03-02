@@ -66,6 +66,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await tg_file.download_to_memory(photo_bytes_io)
         photo_bytes = photo_bytes_io.getvalue()
 
+        # Публичный Telegram URL (нужен для KIE.AI)
+        tg_file_url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_file.file_path}"
+
         # Сохраняем оригинал
         original_path = config.ORDERS_DIR / f"order_{order_id:05d}_original.jpg"
         _image_processor.save_original(photo_bytes, original_path)
@@ -83,7 +86,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="Markdown",
         )
 
-        generated_bytes = await _ai_generator.generate(original_path)
+        generated_bytes = await _ai_generator.generate(original_path, source_image_url=tg_file_url)
 
         # Сохраняем сгенерированный дизайн (оригинал без водяного знака)
         generated_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
