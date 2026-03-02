@@ -268,7 +268,8 @@ class AIGenerator:
                 elapsed += interval
 
                 poll_resp = await client.get(
-                    f"https://api.kie.ai/api/v1/jobs/getTask/{task_id}",
+                    "https://api.kie.ai/api/v1/playground/recordInfo",
+                    params={"taskId": task_id},
                     headers=poll_headers,
                 )
                 if poll_resp.status_code != 200:
