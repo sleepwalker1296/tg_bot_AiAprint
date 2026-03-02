@@ -215,9 +215,13 @@ class AIGenerator:
             )
 
         prompt = (
-            "Transform this car photo into a bold artistic t-shirt print design. "
-            "Style: graphic art illustration, high contrast, vivid colors, "
-            "suitable for DTF printing. White background, no text, no watermarks."
+            "Convert this car photo into a DTF t-shirt print design. "
+            "Preserve the exact car: same make, model, body color, rims, headlights, and all distinctive details — draw it faithfully. "
+            "Style: bold graphic art illustration, vibrant saturated colors, high contrast, clean sharp outlines, dynamic 3/4 front angle. "
+            "Pure white background, no ground, no shadows, no reflections. "
+            "The car is the ONLY element — no people, no road, no scenery, no text, no watermarks, no logos. "
+            "Full car visible, centered composition. "
+            "Print-ready quality, crisp edges suitable for direct-to-film (DTF) transfer."
         )
 
         headers = {
@@ -229,9 +233,10 @@ class AIGenerator:
             "input": {
                 "prompt": prompt,
                 "image_input": [source_image_url],
-                "aspect_ratio": "1:1",
+                "aspect_ratio": "auto",
+                "google_search": False,
                 "resolution": "1K",
-                "output_format": "jpg",
+                "output_format": "png",
             },
         }
 
