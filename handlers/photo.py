@@ -275,9 +275,11 @@ async def _notify_admins(
     generated_bytes = _image_processor.get_original_bytes(generated_path)
     original_bytes = _image_processor.get_original_bytes(original_path)
 
+    username = (user.username or "нет").replace("_", "\\_")
+    first_name = (user.first_name or "").replace("_", "\\_")
     caption = (
         f"🆕 *Новый заказ #{order_id:05d}*\n\n"
-        f"👤 Пользователь: @{user.username or 'нет'} ({user.first_name or ''})\n"
+        f"👤 Пользователь: @{username} ({first_name})\n"
         f"🆔 TG ID: `{user.id}`\n\n"
         f"📎 Ниже — оригинальный дизайн (без водяного знака, высокое качество)"
     )
