@@ -14,12 +14,90 @@ from loguru import logger
 import config
 
 
+# ---------------------------------------------------------------------------
+# Словарь слоганов по маркам авто (русский, 2 строки)
+# ---------------------------------------------------------------------------
+
+# Ключи в нижнем регистре, включая русские варианты написания
+_BRAND_SLOGANS: list[tuple[list[str], tuple[str, str]]] = [
+    (["bmw", "бмв"],                        ("ПРОСТО BMW",          "ЭТИМ ВСЁ СКАЗАНО")),
+    (["mercedes", "мерседес", "мерс"],      ("MERCEDES",            "НЕ ТРЕБУЕТ ПОЯСНЕНИЙ")),
+    (["toyota", "тойота"],                  ("УМИРАТЬ УМЕЕТ",       "НО НЕ ХОЧЕТ")),
+    (["lada", "лада", "ваз", "vaz"],        ("РОССИЙСКИЙ ОРИГИНАЛ", "БЕЗ АНАЛОГОВ")),
+    (["volkswagen", "vw", "фольксваген"],   ("СДЕЛАНО В ГЕРМАНИИ",  "ЛЮБЯТ В ДУШЕ")),
+    (["audi", "ауди"],                      ("ЧЕТЫРЕ КОЛЬЦА",       "ОДНА ЛЮБОВЬ")),
+    (["ford", "форд"],                      ("FORD НЕ ЕДЕТ",        "FORD ЛЕТИТ")),
+    (["nissan", "ниссан"],                  ("ДРИФТ В КРОВИ",       "С ЗАВОДА")),
+    (["subaru", "субару"],                  ("BOXER ЗВУЧИТ",        "ИЗ СЕРДЦА")),
+    (["honda", "хонда"],                    ("VTEC ВКЛЮЧИЛСЯ",      "ПОЧУВСТВУЙ")),
+    (["mazda", "мазда"],                    ("ZOOM-ZOOM",           "НАВСЕГДА")),
+    (["kia", "киа"],                        ("РАНЬШЕ",              "НЕ УВАЖАЛИ")),
+    (["hyundai", "хёндэ", "хундай"],        ("КОРЕЯ",               "ОТВЕТИЛА")),
+    (["porsche", "порше"],                  ("НЕ ДЛЯ ВСЕХ",         "ДЛЯ СВОИХ")),
+    (["range rover", "рендж ровер"],        ("СЕРВИС КАЖДЫЙ ДЕНЬ",  "ЭТО НОРМАЛЬНО")),
+    (["land rover", "ленд ровер"],          ("БЕЗДОРОЖЬЕ",          "ЭТО ДОМ")),
+    (["jeep", "джип"],                      ("ДОРОГИ НЕ НУЖНЫ",     "СЕРЬЁЗНО")),
+    (["volvo", "вольво"],                   ("ШВЕДЫ ЗНАЮТ",         "КАК ВЫЖИТЬ")),
+    (["renault", "рено"],                   ("ФРАНЦУЗСКИЙ ХАРАКТЕР","НЕ ЛЕЧИТСЯ")),
+    (["peugeot", "пежо"],                   ("ФРАНЦУЗСКИЙ СТИЛЬ",   "ФРАНЦУЗСКИЕ НЕРВЫ")),
+    (["citroen", "ситроен"],                ("ФРАНЦУЗЫ СНОВА",      "УДИВЛЯЮТ")),
+    (["mitsubishi", "мицубиси"],            ("EVO ЖИВ",             "В КАЖДОМ ИЗ НАС")),
+    (["lexus", "лексус"],                   ("ЯПОНСКАЯ РОСКОШЬ",    "БЕЗ ИЗВИНЕНИЙ")),
+    (["infiniti", "инфинити"],              ("РОСКОШЬ",             "В ДЕТАЛЯХ")),
+    (["chevrolet", "шевроле"],              ("ШЕВИК",               "НАРОДНЫЙ ВЫБОР")),
+    (["dodge", "додж"],                     ("АМЕРИКАНСКАЯ",        "НЕВМЕНЯЕМОСТЬ")),
+    (["tesla", "тесла"],                    ("ТИХО",                "НО БЫСТРО")),
+    (["lamborghini", "ламборгини"],         ("КОГДА ТИХО",          "НЕ ВАРИАНТ")),
+    (["ferrari", "феррари"],                ("КРАСНЫЙ",             "ЕДИНСТВЕННЫЙ ЦВЕТ")),
+    (["maserati", "мазерати"],              ("ЗВУК",                "КОТОРЫЙ ПОМНЯТ")),
+    (["alfa romeo", "альфа ромео"],         ("ИТАЛЬЯНСКИЙ ТЕМПЕРАМЕНТ", "ИТАЛЬЯНСКАЯ НАДЁЖНОСТЬ")),
+    (["suzuki", "сузуки"],                  ("МАЛЕНЬКИЙ",           "НО ЗЛОЙ")),
+    (["skoda", "шкода"],                    ("ПРОСТО РАБОТАЕТ",     "БЕЗ ЛИШНИХ СЛОВ")),
+    (["opel", "опель"],                     ("НЕМЕЦ",               "С ДУШОЙ")),
+    (["mini", "мини"],                      ("МАЛЕНЬКИЙ СНАРУЖИ",   "БОЛЬШОЙ ВНУТРИ")),
+    (["rolls-royce", "rolls royce", "роллс ройс"], ("КОГДА ВСЁ ОСТАЛЬНОЕ", "ЭТО НЕ ROLLS")),
+    (["bentley", "бентли"],                 ("СКОРОСТЬ",            "С ДОСТОИНСТВОМ")),
+    (["aston martin", "астон мартин"],      ("ДЖЕЙМС БОНд",        "ОДОБРИЛ БЫ")),
+    (["jaguar", "ягуар"],                   ("БРИТАНСКАЯ КРОВЬ",    "НИКОГДА НЕ ОСТЫНЕТ")),
+    (["uaz", "уаз"],                        ("УАЗ ЕДЕТ",            "КОГДА ВСЕ ЗАСТРЯЛИ")),
+    (["haval", "хавал"],                    ("КИТАЙ",               "УДИВЛЯЕТ")),
+    (["chery", "чери"],                     ("ЧЕМ НЕ ЯПОНЕЦ",       "ВОПРОС ОТКРЫТ")),
+    (["geely", "джили"],                    ("БУДУЩЕЕ",             "УЖЕ ЗДЕСЬ")),
+    (["genesis", "дженезис"],               ("КОРЕЯ",               "ВЫРОСЛА")),
+    (["cadillac", "кадиллак"],              ("AMERICAN DREAM",      "НА КОЛЁСАХ")),
+    (["lincoln", "линкольн"],               ("АМЕРИКАНСКАЯ РОСКОШЬ","ДЛЯ ВСЕХ")),
+    (["volga", "волга", "газ"],             ("СОВЕТСКАЯ КЛАССИКА",  "ВЕЧНЫЙ СТИЛЬ")),
+    (["москвич", "moskvich"],               ("МОСКВИЧ ВЕРНУЛСЯ",    "МОСКВА В ШОКЕ")),
+]
+
+_DEFAULT_SLOGAN: tuple[str, str] = ("ТВОЙ АВТОМОБИЛЬ", "ТВОЙ ПРИНТ")
+
+
+def get_slogan_for_car(car_brand: str) -> tuple[str, str]:
+    """Возвращает пару строк слогана по введённой марке авто."""
+    if not car_brand:
+        return _DEFAULT_SLOGAN
+    text = car_brand.lower()
+    for keys, slogan in _BRAND_SLOGANS:
+        for key in keys:
+            if key in text:
+                return slogan
+    return _DEFAULT_SLOGAN
+
+
+# ---------------------------------------------------------------------------
+# Ошибка генерации
+# ---------------------------------------------------------------------------
+
 class AIGenerationError(Exception):
     """Ошибка генерации изображения."""
 
 
+# ---------------------------------------------------------------------------
+# Основной класс генератора
+# ---------------------------------------------------------------------------
+
 class AIGenerator:
-    """Генерирует дизайн принта на основе фото автомобиля."""
 
     async def generate(
         self,
@@ -27,18 +105,18 @@ class AIGenerator:
         source_image_url: str = "",
         tshirt_color: str = "white",
         license_plate: str | None = None,
+        car_brand: str = "",
     ) -> bytes:
         """
-        Принимает путь к оригинальному фото.
         source_image_url — публичный URL для KIE.AI.
         tshirt_color     — 'white' или 'black'.
-        license_plate    — гос. номер авто (опционально).
-        Возвращает байты PNG-изображения.
+        license_plate    — гос. номер (опционально).
+        car_brand        — марка/модель авто для подбора слогана.
         """
         provider = config.AI_PROVIDER.lower()
         logger.info(
-            "Generating design via provider={}, color={}, plate={}",
-            provider, tshirt_color, license_plate,
+            "Generating via provider={}, color={}, plate={}, brand={}",
+            provider, tshirt_color, license_plate, car_brand,
         )
 
         if provider == "openai":
@@ -49,87 +127,10 @@ class AIGenerator:
             return await self._generate_replicate(source_image_path)
         elif provider == "kieai":
             return await self._generate_kieai(
-                source_image_url, tshirt_color, license_plate, source_image_path
+                source_image_url, tshirt_color, license_plate, car_brand
             )
         else:
             raise AIGenerationError(f"Неизвестный AI_PROVIDER: {provider}")
-
-    # ------------------------------------------------------------------
-    # Вспомогательный шаг: анализ авто + генерация слогана через GPT-4o
-    # ------------------------------------------------------------------
-
-    async def _analyze_car_and_get_tagline(self, image_path: Path) -> dict:
-        """
-        Использует GPT-4o Vision для определения марки/модели авто
-        и генерации смешного русского слогана специфичного для этой машины.
-        Возвращает dict: {car, tagline_line1, tagline_line2}.
-        Если OPENAI_API_KEY не задан — возвращает пустой dict.
-        """
-        if not config.OPENAI_API_KEY:
-            logger.debug("OPENAI_API_KEY not set, skipping car analysis")
-            return {}
-
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-
-            with open(image_path, "rb") as f:
-                image_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-            logger.debug("Analyzing car with GPT-4o Vision...")
-            response = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}",
-                                "detail": "low",
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "You are a creative copywriter for automotive apparel.\n"
-                                "Look at this car photo and:\n"
-                                "1. Identify: make, model, approximate year, body type.\n"
-                                "2. Write a SHORT funny/ironic Russian t-shirt slogan (2 lines) "
-                                "that references THIS specific car's real reputation, culture, or memes. "
-                                "Keep it brief — max 4-5 words per line. "
-                                "Uppercase. Humor that car enthusiasts would appreciate.\n\n"
-                                "Examples of the STYLE (not to copy verbatim):\n"
-                                "- BMW 3 Touring: 'НЕ УНИВЕРСАЛ\\nЭТО WAGON'\n"
-                                "- Toyota Land Cruiser 200: 'ДОРОГИ?\\nНЕ СЛЫШАЛ'\n"
-                                "- Lada Vesta: 'РОССИЙСКИЙ ОТВЕТ\\nВСЕМУ МИРУ'\n"
-                                "- Range Rover: 'СЕРВИС КАЖДЫЙ ДЕНЬ\\nЭТО НОРМАЛЬНО'\n"
-                                "- Porsche Cayenne: 'НЕ ДЛЯ ТРЕКОВ\\nДЛЯ ПОНТОВ'\n"
-                                "- Mercedes S-Class: 'ЕХАЛ ИЗ САЛОНА\\nНЕ СБАВЛЯЯ'\n\n"
-                                "Respond ONLY with valid JSON, no extra text:\n"
-                                '{"car": "Make Model Year", "tagline_line1": "LINE1", "tagline_line2": "LINE2"}'
-                            ),
-                        },
-                    ],
-                }],
-                max_tokens=150,
-                temperature=0.9,
-            )
-
-            raw = response.choices[0].message.content.strip()
-            # Вырезаем JSON если обёрнут в ```
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            result = _json.loads(raw)
-            logger.info("Car identified: {}, tagline: {} / {}",
-                        result.get("car"), result.get("tagline_line1"), result.get("tagline_line2"))
-            return result
-
-        except Exception as exc:
-            logger.warning("Car analysis failed (non-critical): {}", exc)
-            return {}
 
     # ------------------------------------------------------------------
     # KIE.AI Nano Banana 2
@@ -140,102 +141,79 @@ class AIGenerator:
         source_image_url: str,
         tshirt_color: str = "white",
         license_plate: str | None = None,
-        source_image_path: Path | None = None,
+        car_brand: str = "",
     ) -> bytes:
-        """
-        Генерация через KIE.AI Nano Banana 2.
-        Перед вызовом KIE.AI — опционально анализирует авто через GPT-4o.
-        """
         import asyncio
 
         if not source_image_url:
-            raise AIGenerationError(
-                "KIE.AI: не передан source_image_url."
-            )
+            raise AIGenerationError("KIE.AI: не передан source_image_url.")
 
-        # --- Анализ авто и генерация слогана ---
-        tagline_info: dict = {}
-        if source_image_path:
-            tagline_info = await self._analyze_car_and_get_tagline(source_image_path)
+        # Слоган
+        slogan_line1, slogan_line2 = get_slogan_for_car(car_brand)
 
-        car_name = tagline_info.get("car", "")
-        line1 = tagline_info.get("tagline_line1", "")
-        line2 = tagline_info.get("tagline_line2", "")
-
-        # --- Сборка промта ---
-
-        # Описание авто для KIE.AI
-        car_subject = (
-            f"the {car_name}" if car_name
-            else "the car from the reference photo"
+        # Цвет футболки на русском
+        shirt_ru = "чёрной" if tshirt_color == "black" else "белой"
+        shirt_contrast = (
+            "Принт рассчитан на тёмную ткань: яркие цвета, светлые блики, "
+            "текст белый или светлый."
+            if tshirt_color == "black" else
+            "Принт рассчитан на светлую ткань: жирные тёмные контуры, "
+            "глубокие тени, текст чёрный или тёмный."
         )
 
-        # Инструкции по гос. номеру
-        plate_instruction = (
-            f'Include the license plate reading "{license_plate}" '
-            f"on the car\'s rear/front license plate holder. "
-            if license_plate else ""
-        )
-
-        # Инструкции по тексту-слогану
-        if line1 and line2:
-            text_instruction = (
-                f'The t-shirt print includes bold stylized text: '
-                f'"{line1}" on the first line and "{line2}" on the second line. '
-                f'Place the text above and/or below the car illustration. '
-                f'Use a bold condensed automotive font style. '
+        # Гос. номер
+        if license_plate:
+            plate_instruction = (
+                f"Сохрани государственный номер «{license_plate}» на номерном знаке автомобиля "
+                f"вместе с флагом страны на номере — точно как в оригинале."
             )
         else:
-            text_instruction = ""
-
-        # Адаптация под цвет футболки
-        if tshirt_color == "black":
-            shirt_desc = "jet-black"
-            contrast_note = (
-                "Print uses vibrant colors, bright highlights, and glowing edges "
-                "that stand out dramatically against the black shirt fabric. "
-                "Text is white or bright colored. "
-            )
-        else:
-            shirt_desc = "pure white"
-            contrast_note = (
-                "Print uses bold dark outlines and deep shadows "
-                "with vivid saturated colors that contrast sharply against the white shirt. "
-                "Text is black or dark colored. "
+            plate_instruction = (
+                "Если на фото виден государственный номер — сохрани его вместе с флагом на знаке."
             )
 
         prompt = (
-            # 1. Тип изображения — полный мокап
-            f"Create a professional flat-lay product photo of a COMPLETE {shirt_desc} t-shirt "
-            f"on a clean studio background. "
-            f"The ENTIRE t-shirt must be fully visible in the frame: "
-            f"collar at the top, both sleeves fully outstretched left and right, "
-            f"and the full hem at the bottom. No cropping of any part of the shirt. "
+            # Общая задача
+            "Создай фотореалистичный мокап футболки с авто-принтом.\n"
 
-            # 2. Принт на футболке
-            f"On the front chest area of the t-shirt there is a bold automotive graphic print featuring {car_subject}. "
-            f"Illustration style: premium motorsport apparel brand aesthetic (like Exhaust, Stance, HKS), "
-            f"dynamic 3/4 front-angle view of the car, bold sharp outlines, "
-            f"dramatic cinematic lighting with deep shadows and highlights, "
-            f"high contrast, street art / JDM tuning culture graphic style. "
-            f"Preserve exact make, model, body color, rims, and headlights of the car faithfully. "
-            f"Full car visible, centered in the print area. "
+            # Футболка — полностью в кадре
+            f"Покажи полностью {shirt_ru} футболку: воротник сверху, "
+            f"оба рукава по бокам, подол снизу — без обрезки. "
+            f"Чистый студийный фон за футболкой.\n"
 
-            # 3. Гос. номер
-            f"{plate_instruction}"
+            # Принт на груди
+            "На передней части футболки по центру — авто-принт:\n"
 
-            # 4. Слоган
-            f"{text_instruction}"
+            # Автомобиль
+            "Автомобиль нарисован как смелая художественная иллюстрация — "
+            "жирные контуры, высокий контраст, кинематографическое освещение с глубокими тенями. "
+            "Сохрани точно: марку, модель, цвет кузова, диски, фары и все характерные детали "
+            "без изменений и без тюнинга. "
+            "Авто занимает большую часть принта, полностью виден, по центру.\n"
 
-            # 5. Цветовой контраст
-            f"{contrast_note}"
+            # Фон принта — из референс-фото, отрисованный в стиле иллюстрации
+            "Фон на принте — воспроизведи окружение с оригинального фото клиента "
+            "(улица, парковка, природа и т.д.), но отрисованный в том же художественном стиле "
+            "иллюстрации, что и автомобиль: жирные контуры, высокий контраст, без фотореализма.\n"
 
-            # 6. Ограничения
-            f"No people, no background scenery, no road, no watermarks, no extra logos outside the print. "
-            f"The t-shirt is the only subject. Photorealistic product mockup quality."
+            # Гос. номер
+            f"{plate_instruction}\n"
+
+            # Слоган — строго один раз, внизу принта
+            f"В нижней части принта, под машиной — ОДИН раз жирный стилизованный текст "
+            f"в две строки: первая строка «{slogan_line1}», вторая строка «{slogan_line2}». "
+            f"Текст размещается только один раз, не повторяется. "
+            f"Шрифт широкий, заглавный, в стиле авто-брендов.\n"
+
+            # Контраст под цвет
+            f"{shirt_contrast}\n"
+
+            # Качество
+            "Качество готово к DTF-печати: чёткие края, детализированный рисунок."
         )
 
-        logger.debug("KIE.AI prompt ({} chars): {}", len(prompt), prompt[:200])
+        logger.debug("KIE.AI prompt ({} chars)", len(prompt))
+        logger.debug("Slogan: {} / {}", slogan_line1, slogan_line2)
 
         headers = {
             "Content-Type": "application/json",
@@ -260,7 +238,9 @@ class AIGenerator:
                 json=payload,
             )
             if resp.status_code != 200:
-                raise AIGenerationError(f"KIE.AI createTask error {resp.status_code}: {resp.text}")
+                raise AIGenerationError(
+                    f"KIE.AI createTask error {resp.status_code}: {resp.text}"
+                )
             data = resp.json()
 
         task_id = data.get("data", {}).get("taskId")
@@ -269,7 +249,6 @@ class AIGenerator:
 
         logger.info("KIE.AI task created: {}", task_id)
 
-        # Polling: каждые 5 сек, максимум 5 минут
         poll_headers = {"Authorization": f"Bearer {config.KIE_AI_API_KEY}"}
         max_wait = 300
         interval = 5
@@ -294,8 +273,7 @@ class AIGenerator:
                 logger.debug("KIE.AI task {} state={}, elapsed={}s", task_id, state, elapsed)
 
                 if state == "success":
-                    result_json_str = task.get("resultJson", "{}")
-                    result = _json.loads(result_json_str)
+                    result = _json.loads(task.get("resultJson", "{}"))
                     urls = result.get("resultUrls", [])
                     if not urls:
                         raise AIGenerationError("KIE.AI: задача завершена, но resultUrls пуст.")
@@ -323,7 +301,6 @@ class AIGenerator:
         with open(source_image_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
-        logger.debug("Step 1: Analyzing car with GPT-4o Vision...")
         vision_response = await client.chat.completions.create(
             model="gpt-4o",
             messages=[{
@@ -331,16 +308,14 @@ class AIGenerator:
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_data}",
-                            "detail": "high",
-                        },
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}", "detail": "high"},
                     },
                     {
                         "type": "text",
                         "text": (
-                            "Describe this car for a t-shirt print: make, model, color, features. "
-                            "Be specific and concise. Answer in English."
+                            "Опиши автомобиль для принта на футболку: "
+                            "марка, модель, цвет, характерные черты. "
+                            "Кратко и точно."
                         ),
                     },
                 ],
@@ -351,14 +326,12 @@ class AIGenerator:
         logger.debug("Car description: {}", car_description)
 
         prompt = (
-            f"Flat-lay product photo of a complete white t-shirt on white background. "
-            f"Full t-shirt visible: collar, both sleeves, hem. "
-            f"Bold automotive print on front: {car_description}. "
-            f"Style: motorsport apparel, JDM graphic art, high contrast, bold outlines. "
-            f"No people, no extra text, no watermarks."
+            f"Мокап белой футболки, полностью в кадре: воротник, оба рукава, подол. "
+            f"Принт на груди: {car_description}. "
+            f"Стиль: авто-аппарель, жирные контуры, высокий контраст. "
+            f"Без людей, без лишних логотипов."
         )
 
-        logger.debug("Step 2: Generating with DALL-E 3...")
         dalle_response = await client.images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -389,7 +362,7 @@ class AIGenerator:
             form_data.add_field("image_strength", "0.35")
             form_data.add_field("text_prompts[0][text]", config.AI_PROMPT_TEMPLATE)
             form_data.add_field("text_prompts[0][weight]", "1")
-            form_data.add_field("text_prompts[1][text]", "blurry, low quality, text, watermark")
+            form_data.add_field("text_prompts[1][text]", "blurry, low quality, watermark")
             form_data.add_field("text_prompts[1][weight]", "-1")
             form_data.add_field("cfg_scale", "7")
             form_data.add_field("steps", "30")
@@ -426,7 +399,7 @@ class AIGenerator:
             input={
                 "image": f"data:image/jpeg;base64,{image_b64}",
                 "prompt": config.AI_PROMPT_TEMPLATE,
-                "negative_prompt": "blurry, low quality, text, watermark",
+                "negative_prompt": "blurry, low quality, watermark",
                 "prompt_strength": 0.8,
                 "num_inference_steps": 30,
             },

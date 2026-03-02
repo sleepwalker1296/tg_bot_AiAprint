@@ -1,9 +1,8 @@
 """
 Основной обработчик фотографий от пользователей.
-Пайплайн: фото → цвет футболки → гос. номер → генерация → превью.
+Пайплайн: фото → цвет → марка авто → гос. номер → генерация → превью.
 """
 import io
-import re
 from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,7 +11,7 @@ from loguru import logger
 
 import config
 from models import async_session, Order, OrderStatus
-from services.ai_generator import AIGenerator, AIGenerationError
+from services.ai_generator import AIGenerator, AIGenerationError, get_slogan_for_car
 from services.image_processor import ImageProcessor
 from services.moysklad import MoySkladClient, MoySkladError
 
@@ -20,15 +19,14 @@ from services.moysklad import MoySkladClient, MoySkladError
 _image_processor = ImageProcessor()
 _ai_generator = AIGenerator()
 
-# Только белая и чёрная — callback_key → (emoji, рус, англ)
 TSHIRT_COLORS: dict[str, tuple[str, str, str]] = {
-    "white": ("⚪", "Белая", "white"),
-    "black": ("⚫", "Чёрная", "black"),
+    "white": ("⚪", "Белая", "белую"),
+    "black": ("⚫", "Чёрная", "чёрную"),
 }
 
 
 # ---------------------------------------------------------------------------
-# Шаг 1: фото получено — спрашиваем цвет
+# Шаг 1: фото → выбор цвета
 # ---------------------------------------------------------------------------
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -43,9 +41,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    # Сбрасываем все предыдущие состояния
+    for key in ("awaiting_brand", "awaiting_plate", "pending_color_key",
+                "pending_car_brand", "pending_photo_file_id"):
+        context.user_data.pop(key, None)
+
     context.user_data["pending_photo_file_id"] = photo.file_id
-    # Сбрасываем возможное старое состояние ожидания номера
-    context.user_data.pop("awaiting_plate", None)
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("⚪ Белая", callback_data="color_select:white"),
@@ -60,7 +61,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # ---------------------------------------------------------------------------
-# Шаг 2: цвет выбран — спрашиваем гос. номер
+# Шаг 2: цвет выбран → спрашиваем марку авто
 # ---------------------------------------------------------------------------
 
 async def handle_color_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -80,57 +81,71 @@ async def handle_color_selection(update: Update, context: ContextTypes.DEFAULT_T
 
     emoji, color_ru, _ = TSHIRT_COLORS[color_key]
     context.user_data["pending_color_key"] = color_key
+    context.user_data["awaiting_brand"] = True
 
-    # Переходим к запросу гос. номера
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
+        InlineKeyboardButton("⏭ Пропустить", callback_data="brand_skip"),
     ]])
 
     await query.edit_message_text(
-        f"✅ {emoji} *{color_ru}* футболка выбрана.\n\n"
-        "🔢 Введите *гос. номер* автомобиля (например: `А123ВС77`) — "
-        "он будет на машине в принте.\n\n"
-        "Или нажмите «Пропустить», если номер не нужен:",
+        f"{emoji} *{color_ru}* футболка выбрана.\n\n"
+        "🚗 Введите *марку и модель* вашего авто\n"
+        "_(например: BMW 5 серия, Toyota Camry, Лада Веста)_\n\n"
+        "Это нужно для подбора слогана под вашу машину.\n"
+        "Или нажмите «Пропустить»:",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
 
+
+# ---------------------------------------------------------------------------
+# Шаг 3: марка введена → спрашиваем гос. номер
+# ---------------------------------------------------------------------------
+
+async def _ask_for_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показываем запрос гос. номера после получения марки."""
+    context.user_data["awaiting_brand"] = False
     context.user_data["awaiting_plate"] = True
-    context.user_data["plate_prompt_message_id"] = query.message.message_id
 
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
+    ]])
 
-# ---------------------------------------------------------------------------
-# Шаг 3a: пользователь ввёл текст — проверяем не номер ли это
-# ---------------------------------------------------------------------------
-
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Перехватываем текстовые сообщения когда ждём гос. номер."""
-    if not context.user_data.get("awaiting_plate"):
-        return  # Нас не касается — пропускаем
-
-    context.user_data.pop("awaiting_plate", None)
-
-    raw = update.message.text.strip().upper()
-    # Принимаем любой текст длиной 4–9 символов как номер
-    plate = raw if 4 <= len(raw) <= 9 else None
-
-    await update.message.reply_text(
-        f"✅ Номер *{plate}* принят." if plate
-        else "ℹ️ Номер не распознан — продолжаю без номера.",
+    msg = update.effective_message
+    await msg.reply_text(
+        "🔢 Введите *гос. номер* автомобиля _(например: А123ВС77)_\n\n"
+        "Номер будет отображён на машине в принте вместе с флагом.\n"
+        "Или нажмите «Пропустить»:",
         parse_mode="Markdown",
+        reply_markup=keyboard,
     )
 
-    await _launch_generation(update=update, context=context, plate=plate)
+
+async def handle_skip_brand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["pending_car_brand"] = ""
+    context.user_data.pop("awaiting_brand", None)
+
+    await query.edit_message_text(
+        "⏭ Марка пропущена.\n\n"
+        "🔢 Введите *гос. номер* автомобиля _(например: А123ВС77)_\n\n"
+        "Или нажмите «Пропустить»:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
+        ]]),
+    )
+    context.user_data["awaiting_plate"] = True
 
 
 # ---------------------------------------------------------------------------
-# Шаг 3b: пользователь нажал «Пропустить»
+# Шаг 4: гос. номер пропущен
 # ---------------------------------------------------------------------------
 
 async def handle_skip_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-
     context.user_data.pop("awaiting_plate", None)
 
     await query.edit_message_text(
@@ -144,7 +159,34 @@ async def handle_skip_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # ---------------------------------------------------------------------------
-# Запуск генерации (общий для обоих путей шага 3)
+# Универсальный обработчик текста (ловит марку и номер)
+# ---------------------------------------------------------------------------
+
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("awaiting_brand"):
+        brand = update.message.text.strip()
+        context.user_data["pending_car_brand"] = brand
+        await update.message.reply_text(
+            f"✅ Марка *{brand}* принята.",
+            parse_mode="Markdown",
+        )
+        await _ask_for_plate(update, context)
+
+    elif context.user_data.get("awaiting_plate"):
+        context.user_data.pop("awaiting_plate", None)
+        raw = update.message.text.strip().upper()
+        plate = raw if 4 <= len(raw) <= 10 else None
+
+        await update.message.reply_text(
+            f"✅ Номер *{plate}* принят." if plate
+            else "ℹ️ Номер не распознан — продолжаю без номера.",
+            parse_mode="Markdown",
+        )
+        await _launch_generation(update=update, context=context, plate=plate)
+
+
+# ---------------------------------------------------------------------------
+# Запуск генерации
 # ---------------------------------------------------------------------------
 
 async def _launch_generation(
@@ -153,20 +195,19 @@ async def _launch_generation(
     plate: str | None,
     status_message=None,
 ) -> None:
-    """Создаёт заказ в БД и запускает пайплайн генерации."""
     user = update.effective_user
-
     photo_file_id = context.user_data.pop("pending_photo_file_id", None)
     color_key = context.user_data.pop("pending_color_key", "white")
+    car_brand = context.user_data.pop("pending_car_brand", "")
 
     if not photo_file_id:
-        msg = update.effective_message
-        await msg.reply_text("⚠️ Фото потеряно. Пожалуйста, отправьте фото заново.")
+        await update.effective_message.reply_text(
+            "⚠️ Фото потеряно. Пожалуйста, отправьте фото заново."
+        )
         return
 
-    emoji, color_ru, color_en = TSHIRT_COLORS.get(color_key, TSHIRT_COLORS["white"])
+    emoji, color_ru, color_ru_acc = TSHIRT_COLORS.get(color_key, TSHIRT_COLORS["white"])
 
-    # Если пришли из текстового ввода, шлём статусное сообщение сами
     if status_message is None:
         status_message = await update.message.reply_text(
             "⏳ *Генерирую дизайн...* Это займёт 1–2 минуты.",
@@ -193,8 +234,10 @@ async def _launch_generation(
         status_message=status_message,
         order_id=order_id,
         photo_file_id=photo_file_id,
-        color_en=color_en,
+        color_key=color_key,
         color_ru=f"{emoji} {color_ru}",
+        color_ru_acc=color_ru_acc,
+        car_brand=car_brand,
         plate=plate,
         user=user,
     )
@@ -209,8 +252,10 @@ async def _run_generation_pipeline(
     status_message,
     order_id: int,
     photo_file_id: str,
-    color_en: str,
+    color_key: str,
     color_ru: str,
+    color_ru_acc: str,
+    car_brand: str,
     plate: str | None,
     user,
 ) -> None:
@@ -236,8 +281,9 @@ async def _run_generation_pipeline(
         generated_bytes = await _ai_generator.generate(
             original_path,
             source_image_url=tg_file_url,
-            tshirt_color=color_en,
+            tshirt_color=color_key,
             license_plate=plate,
+            car_brand=car_brand,
         )
 
         generated_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
@@ -261,12 +307,16 @@ async def _run_generation_pipeline(
             InlineKeyboardButton("❌ Не нравится", callback_data=f"order_cancel:{order_id}"),
         ]])
 
-        plate_line = f"\n🔢 Номер на принте: *{plate}*" if plate else ""
+        slogan = get_slogan_for_car(car_brand)
+        plate_line = f"\n🔢 Номер: *{plate}*" if plate else ""
+        slogan_line = f"\n✍️ Слоган: _{slogan[0]} / {slogan[1]}_" if slogan[0] else ""
+
         await context.bot.send_photo(
             chat_id=user.id,
             photo=io.BytesIO(preview_bytes),
             caption=(
-                f"🎨 *Ваш дизайн на {color_ru} футболке готов!*{plate_line}\n\n"
+                f"🎨 *Дизайн на {color_ru} футболке готов!*"
+                f"{plate_line}{slogan_line}\n\n"
                 "👆 Предварительный просмотр с водяным знаком.\n"
                 "После оформления заказа — финальный файл в высоком качестве.\n\n"
                 "Нравится? 👇"
@@ -275,7 +325,10 @@ async def _run_generation_pipeline(
             reply_markup=keyboard,
         )
 
-        await _notify_admins(context, order_id, user, color_ru, plate, generated_path, original_path)
+        await _notify_admins(
+            context, order_id, user, color_ru, car_brand, plate,
+            generated_path, original_path,
+        )
 
     except AIGenerationError as exc:
         logger.error("AI generation failed for order {}: {}", order_id, exc)
@@ -303,7 +356,7 @@ async def _run_generation_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Подтверждение / отмена заказа
+# Подтверждение / отмена
 # ---------------------------------------------------------------------------
 
 async def handle_order_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -405,6 +458,7 @@ async def _notify_admins(
     order_id: int,
     user,
     color_ru: str,
+    car_brand: str,
     plate: str | None,
     generated_path: Path,
     original_path: Path,
@@ -417,12 +471,15 @@ async def _notify_admins(
 
     username = (user.username or "нет").replace("_", "\\_")
     first_name = (user.first_name or "").replace("_", "\\_")
+    brand_line = f"\n🚗 Марка: {car_brand}" if car_brand else ""
     plate_line = f"\n🔢 Гос. номер: `{plate}`" if plate else ""
+
     caption = (
         f"🆕 *Новый заказ #{order_id:05d}*\n\n"
-        f"👤 Пользователь: @{username} ({first_name})\n"
+        f"👤 @{username} ({first_name})\n"
         f"🆔 TG ID: `{user.id}`\n"
-        f"👕 Цвет: {color_ru}{plate_line}\n\n"
+        f"👕 Цвет: {color_ru}"
+        f"{brand_line}{plate_line}\n\n"
         f"📎 Оригинальный дизайн (без водяного знака)"
     )
 
@@ -431,7 +488,7 @@ async def _notify_admins(
             await context.bot.send_photo(
                 chat_id=admin_id,
                 photo=io.BytesIO(original_bytes),
-                caption=f"📷 *Исходное фото авто* (заказ #{order_id:05d})",
+                caption=f"📷 *Исходное фото* (заказ #{order_id:05d})",
                 parse_mode="Markdown",
             )
             await context.bot.send_document(
@@ -454,9 +511,10 @@ def register(app: Application) -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     app.add_handler(CallbackQueryHandler(handle_color_selection, pattern=r"^color_select:"))
-    app.add_handler(CallbackQueryHandler(handle_skip_plate, pattern=r"^plate_skip$"))
+    app.add_handler(CallbackQueryHandler(handle_skip_brand,  pattern=r"^brand_skip$"))
+    app.add_handler(CallbackQueryHandler(handle_skip_plate,  pattern=r"^plate_skip$"))
     app.add_handler(CallbackQueryHandler(handle_order_confirm, pattern=r"^order_confirm:"))
-    app.add_handler(CallbackQueryHandler(handle_order_cancel, pattern=r"^order_cancel:"))
+    app.add_handler(CallbackQueryHandler(handle_order_cancel,  pattern=r"^order_cancel:"))
 
 
 class _Router:
