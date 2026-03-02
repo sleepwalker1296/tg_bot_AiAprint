@@ -17,9 +17,13 @@ async def init_db() -> None:
     """Создаёт таблицы в базе данных если их нет."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Миграция: добавляем tshirt_color если колонки ещё нет (SQLite не поддерживает IF NOT EXISTS)
-        try:
-            await conn.execute(text("ALTER TABLE orders ADD COLUMN tshirt_color VARCHAR(50)"))
-        except Exception as exc:
-            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
-                raise
+        # Миграция: добавляем новые колонки если их ещё нет (SQLite не поддерживает IF NOT EXISTS)
+        for ddl in (
+            "ALTER TABLE orders ADD COLUMN tshirt_color VARCHAR(50)",
+            "ALTER TABLE orders ADD COLUMN license_plate VARCHAR(20)",
+        ):
+            try:
+                await conn.execute(text(ddl))
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
+                    raise
