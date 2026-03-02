@@ -35,6 +35,9 @@ class Order(Base):
     original_photo_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     generated_image_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # Цвет футболки
+    tshirt_color: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # МойСклад
     moysklad_order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     moysklad_order_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -20,14 +20,20 @@ class AIGenerationError(Exception):
 class AIGenerator:
     """Генерирует дизайн принта на основе фото автомобиля."""
 
-    async def generate(self, source_image_path: Path, source_image_url: str = "") -> bytes:
+    async def generate(
+        self,
+        source_image_path: Path,
+        source_image_url: str = "",
+        tshirt_color: str = "white",
+    ) -> bytes:
         """
         Принимает путь к оригинальному фото.
         source_image_url — публичный URL для провайдеров, которым нужен URL (kieai).
+        tshirt_color — цвет футболки на английском ('white', 'black', 'light gray', 'navy blue').
         Возвращает байты PNG-изображения дизайна.
         """
         provider = config.AI_PROVIDER.lower()
-        logger.info("Generating design via provider={}", provider)
+        logger.info("Generating design via provider={}, tshirt_color={}", provider, tshirt_color)
 
         if provider == "openai":
             return await self._generate_openai(source_image_path)
@@ -36,7 +42,7 @@ class AIGenerator:
         elif provider == "replicate":
             return await self._generate_replicate(source_image_path)
         elif provider == "kieai":
-            return await self._generate_kieai(source_image_url)
+            return await self._generate_kieai(source_image_url, tshirt_color)
         else:
             raise AIGenerationError(f"Неизвестный AI_PROVIDER: {provider}")
 
@@ -199,11 +205,12 @@ class AIGenerator:
     # KIE.AI Nano Banana 2 (image-to-image + polling)
     # ------------------------------------------------------------------
 
-    async def _generate_kieai(self, source_image_url: str) -> bytes:
+    async def _generate_kieai(self, source_image_url: str, tshirt_color: str = "white") -> bytes:
         """
         Генерация через KIE.AI Nano Banana 2.
         Создаёт задачу и опрашивает статус каждые 5 сек (до 5 минут).
         source_image_url — публичный URL исходного изображения.
+        tshirt_color — цвет футболки на английском для включения в промт.
         """
         import asyncio
         import json as _json
@@ -214,14 +221,31 @@ class AIGenerator:
                 "Убедитесь, что AI_PROVIDER=kieai и фото загружается через Telegram."
             )
 
+        # Адаптируем стиль печати под цвет футболки
+        if tshirt_color in ("black", "navy blue"):
+            bg_instruction = (
+                f"The t-shirt color is {tshirt_color}. "
+                "Design the print for a dark-colored shirt: use vibrant colors, bright highlights, "
+                "and strong contrast against the dark background. "
+                "The print area background should be transparent/dark to blend with the shirt. "
+                "Emphasize glowing neon-like edges and dramatic lighting on the car. "
+            )
+        else:
+            bg_instruction = (
+                f"The t-shirt color is {tshirt_color}. "
+                "Design the print for a light-colored shirt: bold dark outlines, deep shadows, "
+                "vivid saturated colors with strong contrast against the light shirt background. "
+            )
+
         prompt = (
-            "Convert this car photo into a DTF t-shirt print design. "
-            "Preserve the exact car: same make, model, body color, rims, headlights, and all distinctive details — draw it faithfully. "
-            "Style: bold graphic art illustration, vibrant saturated colors, high contrast, clean sharp outlines, dynamic 3/4 front angle. "
-            "Pure white background, no ground, no shadows, no reflections. "
-            "The car is the ONLY element — no people, no road, no scenery, no text, no watermarks, no logos. "
-            "Full car visible, centered composition. "
-            "Print-ready quality, crisp edges suitable for direct-to-film (DTF) transfer."
+            f"Create a premium automotive t-shirt print in the style of high-end motorsport apparel brands (like Exhaust, Stance, Illest). "
+            f"Use the car in the photo as the subject — preserve its exact make, model, body color, rims, headlights, and all distinctive details faithfully. "
+            f"Illustration style: bold dramatic graphic art, dynamic 3/4 front angle, deep shadow work, "
+            f"cinematic lighting with strong contrast, crisp sharp outlines, street art / JDM tuning culture aesthetic. "
+            f"The car should fill most of the composition, centered, full car visible. "
+            f"{bg_instruction}"
+            f"No people, no road, no scenery, no watermarks, no text, no extra logos. "
+            f"Print-ready quality with crisp edges suitable for DTF (direct-to-film) transfer onto a {tshirt_color} t-shirt."
         )
 
         headers = {
