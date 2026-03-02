@@ -67,7 +67,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         photo_bytes = photo_bytes_io.getvalue()
 
         # Публичный Telegram URL (нужен для KIE.AI)
-        tg_file_url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{tg_file.file_path}"
+        # В PTB v20+ file_path уже содержит полный URL
+        fp = tg_file.file_path
+        if fp.startswith("http"):
+            tg_file_url = fp
+        else:
+            tg_file_url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN}/{fp.lstrip('/')}"
 
         # Сохраняем оригинал
         original_path = config.ORDERS_DIR / f"order_{order_id:05d}_original.jpg"
