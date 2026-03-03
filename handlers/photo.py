@@ -1,6 +1,6 @@
 """
 Основной обработчик фотографий от пользователей.
-Пайплайн: фото → цвет → марка авто → гос. номер → генерация → превью.
+Пайплайн: фото → цвет → текст на принт (опц.) → гос. номер (опц.) → генерация → превью.
 """
 import io
 from pathlib import Path
@@ -11,7 +11,7 @@ from loguru import logger
 
 import config
 from models import async_session, Order, OrderStatus
-from services.ai_generator import AIGenerator, AIGenerationError, get_slogan_for_car
+from services.ai_generator import AIGenerator, AIGenerationError
 from services.image_processor import ImageProcessor
 from services.moysklad import MoySkladClient, MoySkladError
 
@@ -19,9 +19,9 @@ from services.moysklad import MoySkladClient, MoySkladError
 _image_processor = ImageProcessor()
 _ai_generator = AIGenerator()
 
-TSHIRT_COLORS: dict[str, tuple[str, str, str]] = {
-    "white": ("⚪", "Белая", "белую"),
-    "black": ("⚫", "Чёрная", "чёрную"),
+TSHIRT_COLORS: dict[str, tuple[str, str]] = {
+    "white": ("⚪", "Белая"),
+    "black": ("⚫", "Чёрная"),
 }
 
 
@@ -42,14 +42,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Сбрасываем все предыдущие состояния
-    for key in ("awaiting_brand", "awaiting_plate", "pending_color_key",
-                "pending_car_brand", "pending_photo_file_id"):
+    for key in ("awaiting_custom_text", "awaiting_plate",
+                "pending_color_key", "pending_custom_text", "pending_photo_file_id"):
         context.user_data.pop(key, None)
 
     context.user_data["pending_photo_file_id"] = photo.file_id
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⚪ Белая", callback_data="color_select:white"),
+        InlineKeyboardButton("⚪ Белая",  callback_data="color_select:white"),
         InlineKeyboardButton("⚫ Чёрная", callback_data="color_select:black"),
     ]])
 
@@ -61,7 +61,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # ---------------------------------------------------------------------------
-# Шаг 2: цвет выбран → спрашиваем марку авто
+# Шаг 2: цвет выбран → спрашиваем текст для принта
 # ---------------------------------------------------------------------------
 
 async def handle_color_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -79,77 +79,59 @@ async def handle_color_selection(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    emoji, color_ru, _ = TSHIRT_COLORS[color_key]
+    emoji, color_ru = TSHIRT_COLORS[color_key]
     context.user_data["pending_color_key"] = color_key
-    context.user_data["awaiting_brand"] = True
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⏭ Пропустить", callback_data="brand_skip"),
-    ]])
+    context.user_data["awaiting_custom_text"] = True
 
     await query.edit_message_text(
         f"{emoji} *{color_ru}* футболка выбрана.\n\n"
-        "🚗 Введите *марку и модель* вашего авто\n"
-        "_(например: BMW 5 серия, Toyota Camry, Лада Веста)_\n\n"
-        "Это нужно для подбора слогана под вашу машину.\n"
-        "Или нажмите «Пропустить»:",
+        "✍️ Введите *текст для принта на футболке*\n"
+        "_(например: МОЩЬ В КАЖДОЙ ДЕТАЛИ, ЖИВУ НА СКОРОСТИ)_\n\n"
+        "Текст будет размещён под машиной на принте.\n"
+        "Если текст не нужен — нажмите «Пропустить»:",
         parse_mode="Markdown",
-        reply_markup=keyboard,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⏭ Пропустить", callback_data="custom_text_skip"),
+        ]]),
     )
 
 
 # ---------------------------------------------------------------------------
-# Шаг 3: марка введена → спрашиваем гос. номер
+# Шаг 2b: текст пропущен → переходим к номеру
 # ---------------------------------------------------------------------------
 
-async def _ask_for_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показываем запрос гос. номера после получения марки."""
-    context.user_data["awaiting_brand"] = False
-    context.user_data["awaiting_plate"] = True
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
-    ]])
-
-    msg = update.effective_message
-    await msg.reply_text(
-        "🔢 Введите *гос. номер* автомобиля _(например: А123ВС77)_\n\n"
-        "Номер будет отображён на машине в принте вместе с флагом.\n"
-        "Или нажмите «Пропустить»:",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
-
-
-async def handle_skip_brand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_skip_custom_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    context.user_data["pending_car_brand"] = ""
-    context.user_data.pop("awaiting_brand", None)
+
+    context.user_data.pop("awaiting_custom_text", None)
+    context.user_data["pending_custom_text"] = None
+    context.user_data["awaiting_plate"] = True
 
     await query.edit_message_text(
-        "⏭ Марка пропущена.\n\n"
+        "⏭ Текст пропущен — принт будет без надписи.\n\n"
         "🔢 Введите *гос. номер* автомобиля _(например: А123ВС77)_\n\n"
-        "Или нажмите «Пропустить»:",
+        "Номер будет на машине в принте вместе с флагом.\n"
+        "Если номер хорошо виден на фото — можно пропустить:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
         ]]),
     )
-    context.user_data["awaiting_plate"] = True
 
 
 # ---------------------------------------------------------------------------
-# Шаг 4: гос. номер пропущен
+# Шаг 3: гос. номер пропущен → запуск генерации
 # ---------------------------------------------------------------------------
 
 async def handle_skip_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+
     context.user_data.pop("awaiting_plate", None)
 
     await query.edit_message_text(
-        "⏭ Гос. номер пропущен.\n\n"
+        "⏭ Номер пропущен — использую номер с фото (если виден).\n\n"
         "⏳ *Генерирую дизайн...* Это займёт 1–2 минуты.",
         parse_mode="Markdown",
     )
@@ -159,18 +141,25 @@ async def handle_skip_plate(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # ---------------------------------------------------------------------------
-# Универсальный обработчик текста (ловит марку и номер)
+# Универсальный обработчик текстового ввода
 # ---------------------------------------------------------------------------
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get("awaiting_brand"):
-        brand = update.message.text.strip()
-        context.user_data["pending_car_brand"] = brand
+    if context.user_data.get("awaiting_custom_text"):
+        context.user_data.pop("awaiting_custom_text", None)
+        text = update.message.text.strip()
+        context.user_data["pending_custom_text"] = text or None
+        context.user_data["awaiting_plate"] = True
+
         await update.message.reply_text(
-            f"✅ Марка *{brand}* принята.",
+            f"✅ Текст *«{text}»* будет на принте.\n\n"
+            "🔢 Введите *гос. номер* автомобиля _(например: А123ВС77)_\n\n"
+            "Если номер хорошо виден на фото — можно пропустить:",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⏭ Пропустить", callback_data="plate_skip"),
+            ]]),
         )
-        await _ask_for_plate(update, context)
 
     elif context.user_data.get("awaiting_plate"):
         context.user_data.pop("awaiting_plate", None)
@@ -179,7 +168,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         await update.message.reply_text(
             f"✅ Номер *{plate}* принят." if plate
-            else "ℹ️ Номер не распознан — продолжаю без номера.",
+            else "ℹ️ Не похоже на гос. номер — продолжаю без явного номера.",
             parse_mode="Markdown",
         )
         await _launch_generation(update=update, context=context, plate=plate)
@@ -196,9 +185,9 @@ async def _launch_generation(
     status_message=None,
 ) -> None:
     user = update.effective_user
-    photo_file_id = context.user_data.pop("pending_photo_file_id", None)
-    color_key = context.user_data.pop("pending_color_key", "white")
-    car_brand = context.user_data.pop("pending_car_brand", "")
+    photo_file_id  = context.user_data.pop("pending_photo_file_id", None)
+    color_key      = context.user_data.pop("pending_color_key", "white")
+    custom_text    = context.user_data.pop("pending_custom_text", None)
 
     if not photo_file_id:
         await update.effective_message.reply_text(
@@ -206,7 +195,7 @@ async def _launch_generation(
         )
         return
 
-    emoji, color_ru, color_ru_acc = TSHIRT_COLORS.get(color_key, TSHIRT_COLORS["white"])
+    emoji, color_ru = TSHIRT_COLORS.get(color_key, TSHIRT_COLORS["white"])
 
     if status_message is None:
         status_message = await update.message.reply_text(
@@ -221,6 +210,7 @@ async def _launch_generation(
         original_photo_file_id=photo_file_id,
         tshirt_color=color_key,
         license_plate=plate,
+        custom_text=custom_text,
         status=OrderStatus.GENERATING,
     )
     async with async_session() as session:
@@ -236,8 +226,7 @@ async def _launch_generation(
         photo_file_id=photo_file_id,
         color_key=color_key,
         color_ru=f"{emoji} {color_ru}",
-        color_ru_acc=color_ru_acc,
-        car_brand=car_brand,
+        custom_text=custom_text,
         plate=plate,
         user=user,
     )
@@ -254,8 +243,7 @@ async def _run_generation_pipeline(
     photo_file_id: str,
     color_key: str,
     color_ru: str,
-    color_ru_acc: str,
-    car_brand: str,
+    custom_text: str | None,
     plate: str | None,
     user,
 ) -> None:
@@ -283,20 +271,20 @@ async def _run_generation_pipeline(
             source_image_url=tg_file_url,
             tshirt_color=color_key,
             license_plate=plate,
-            car_brand=car_brand,
+            custom_text=custom_text,
         )
 
         generated_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
         _image_processor.save_original(generated_bytes, generated_path)
 
         preview_bytes = _image_processor.create_preview(generated_path)
-        preview_path = config.ORDERS_DIR / f"order_{order_id:05d}_preview.jpg"
+        preview_path  = config.ORDERS_DIR / f"order_{order_id:05d}_preview.jpg"
         preview_path.write_bytes(preview_bytes)
 
         async with async_session() as session:
             db_order = await session.get(Order, order_id)
             db_order.generated_image_path = str(generated_path)
-            db_order.preview_image_path = str(preview_path)
+            db_order.preview_image_path   = str(preview_path)
             db_order.status = OrderStatus.PREVIEW_SENT
             await session.commit()
 
@@ -304,19 +292,18 @@ async def _run_generation_pipeline(
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Хочу заказать!", callback_data=f"order_confirm:{order_id}"),
-            InlineKeyboardButton("❌ Не нравится", callback_data=f"order_cancel:{order_id}"),
+            InlineKeyboardButton("❌ Не нравится",   callback_data=f"order_cancel:{order_id}"),
         ]])
 
-        slogan = get_slogan_for_car(car_brand)
         plate_line = f"\n🔢 Номер: *{plate}*" if plate else ""
-        slogan_line = f"\n✍️ Слоган: _{slogan[0]} / {slogan[1]}_" if slogan[0] else ""
+        text_line  = f"\n✍️ Текст: _{custom_text}_" if custom_text else ""
 
         await context.bot.send_photo(
             chat_id=user.id,
             photo=io.BytesIO(preview_bytes),
             caption=(
                 f"🎨 *Дизайн на {color_ru} футболке готов!*"
-                f"{plate_line}{slogan_line}\n\n"
+                f"{plate_line}{text_line}\n\n"
                 "👆 Предварительный просмотр с водяным знаком.\n"
                 "После оформления заказа — финальный файл в высоком качестве.\n\n"
                 "Нравится? 👇"
@@ -325,21 +312,19 @@ async def _run_generation_pipeline(
             reply_markup=keyboard,
         )
 
-        await _notify_admins(
-            context, order_id, user, color_ru, car_brand, plate,
-            generated_path, original_path,
-        )
+        await _notify_admins(context, order_id, user, color_ru, custom_text, plate,
+                             generated_path, original_path)
 
     except AIGenerationError as exc:
         logger.error("AI generation failed for order {}: {}", order_id, exc)
         await status_message.edit_text(
-            "❌ *Ошибка генерации.*\n\nПопробуйте отправить другое фото или обратитесь к администратору.",
+            "❌ *Ошибка генерации.*\n\nПопробуйте отправить другое фото.",
             parse_mode="Markdown",
         )
         async with async_session() as session:
             db_order = await session.get(Order, order_id)
             db_order.status = OrderStatus.CANCELLED
-            db_order.notes = f"AI error: {exc}"
+            db_order.notes  = f"AI error: {exc}"
             await session.commit()
 
     except Exception as exc:
@@ -351,7 +336,7 @@ async def _run_generation_pipeline(
         async with async_session() as session:
             db_order = await session.get(Order, order_id)
             db_order.status = OrderStatus.CANCELLED
-            db_order.notes = f"Unexpected error: {exc}"
+            db_order.notes  = f"Unexpected error: {exc}"
             await session.commit()
 
 
@@ -384,11 +369,11 @@ async def handle_order_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
                 order_db_id=order_id,
             )
             moysklad_order_name = ms_order.get("name")
-            moysklad_order_id = ms_order.get("id")
+            moysklad_order_id   = ms_order.get("id")
 
         async with async_session() as session:
             order = await session.get(Order, order_id)
-            order.moysklad_order_id = moysklad_order_id
+            order.moysklad_order_id   = moysklad_order_id
             order.moysklad_order_name = moysklad_order_name
             await session.commit()
 
@@ -410,7 +395,7 @@ async def handle_order_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
 
     for admin_id in config.ADMIN_IDS:
         try:
-            username = (user.username or "нет").replace("_", "\\_")
+            username   = (user.username   or "нет").replace("_", "\\_")
             first_name = (user.first_name or "").replace("_", "\\_")
             await context.bot.send_message(
                 chat_id=admin_id,
@@ -444,7 +429,7 @@ async def handle_order_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_caption(
         "😔 *Дизайн не понравился?*\n\n"
         "Отправьте другое фото — создадим новый вариант!\n\n"
-        "💡 Лучший результат — чёткое фото авто с ракурса спереди-сбоку.",
+        "💡 Лучший результат — чёткое фото авто с хорошим ракурсом.",
         parse_mode="Markdown",
     )
 
@@ -458,7 +443,7 @@ async def _notify_admins(
     order_id: int,
     user,
     color_ru: str,
-    car_brand: str,
+    custom_text: str | None,
     plate: str | None,
     generated_path: Path,
     original_path: Path,
@@ -467,11 +452,11 @@ async def _notify_admins(
         return
 
     generated_bytes = _image_processor.get_original_bytes(generated_path)
-    original_bytes = _image_processor.get_original_bytes(original_path)
+    original_bytes  = _image_processor.get_original_bytes(original_path)
 
-    username = (user.username or "нет").replace("_", "\\_")
+    username   = (user.username   or "нет").replace("_", "\\_")
     first_name = (user.first_name or "").replace("_", "\\_")
-    brand_line = f"\n🚗 Марка: {car_brand}" if car_brand else ""
+    text_line  = f"\n✍️ Текст: {custom_text}" if custom_text else ""
     plate_line = f"\n🔢 Гос. номер: `{plate}`" if plate else ""
 
     caption = (
@@ -479,7 +464,7 @@ async def _notify_admins(
         f"👤 @{username} ({first_name})\n"
         f"🆔 TG ID: `{user.id}`\n"
         f"👕 Цвет: {color_ru}"
-        f"{brand_line}{plate_line}\n\n"
+        f"{text_line}{plate_line}\n\n"
         f"📎 Оригинальный дизайн (без водяного знака)"
     )
 
@@ -510,11 +495,11 @@ async def _notify_admins(
 def register(app: Application) -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
-    app.add_handler(CallbackQueryHandler(handle_color_selection, pattern=r"^color_select:"))
-    app.add_handler(CallbackQueryHandler(handle_skip_brand,  pattern=r"^brand_skip$"))
-    app.add_handler(CallbackQueryHandler(handle_skip_plate,  pattern=r"^plate_skip$"))
-    app.add_handler(CallbackQueryHandler(handle_order_confirm, pattern=r"^order_confirm:"))
-    app.add_handler(CallbackQueryHandler(handle_order_cancel,  pattern=r"^order_cancel:"))
+    app.add_handler(CallbackQueryHandler(handle_color_selection,   pattern=r"^color_select:"))
+    app.add_handler(CallbackQueryHandler(handle_skip_custom_text,  pattern=r"^custom_text_skip$"))
+    app.add_handler(CallbackQueryHandler(handle_skip_plate,        pattern=r"^plate_skip$"))
+    app.add_handler(CallbackQueryHandler(handle_order_confirm,     pattern=r"^order_confirm:"))
+    app.add_handler(CallbackQueryHandler(handle_order_cancel,      pattern=r"^order_cancel:"))
 
 
 class _Router:
