@@ -1,6 +1,8 @@
 """
 Генерация дизайна принта для футболки через KIE.AI Nano Banana 2.
+Параллельно создаёт DTF принт-файл А3 и мокап футболки.
 """
+import asyncio
 import json as _json
 from pathlib import Path
 
@@ -23,8 +25,11 @@ class AIGenerator:
         tshirt_color: str = "white",
         license_plate: str | None = None,
         custom_text: str | None = None,
-    ) -> bytes:
+    ) -> tuple[bytes, bytes]:
         """
+        Параллельно генерирует DTF принт-файл А3 и мокап футболки.
+
+        Возвращает (dtf_bytes, mockup_bytes).
         source_image_url — публичный URL для KIE.AI.
         tshirt_color     — 'white' или 'black'.
         license_plate    — гос. номер (введён пользователем, опционально).
@@ -34,28 +39,31 @@ class AIGenerator:
             raise AIGenerationError(
                 f"Поддерживается только AI_PROVIDER=kieai, получен: {config.AI_PROVIDER}"
             )
-        logger.info(
-            "Generating via KIE.AI, color={}, plate={}, text={}",
-            tshirt_color, license_plate, custom_text,
-        )
-        return await self._generate_kieai(source_image_url, tshirt_color, license_plate, custom_text)
-
-    # ------------------------------------------------------------------
-    # KIE.AI Nano Banana 2
-    # ------------------------------------------------------------------
-
-    async def _generate_kieai(
-        self,
-        source_image_url: str,
-        tshirt_color: str = "white",
-        license_plate: str | None = None,
-        custom_text: str | None = None,
-    ) -> bytes:
-        import asyncio
-
         if not source_image_url:
             raise AIGenerationError("KIE.AI: не передан source_image_url.")
 
+        logger.info(
+            "Generating via KIE.AI (DTF + mockup), color={}, plate={}, text={}",
+            tshirt_color, license_plate, custom_text,
+        )
+
+        dtf_task    = self._generate_kieai_dtf(source_image_url, tshirt_color, license_plate, custom_text)
+        mockup_task = self._generate_kieai_mockup(source_image_url, tshirt_color, license_plate, custom_text)
+
+        dtf_bytes, mockup_bytes = await asyncio.gather(dtf_task, mockup_task)
+        return dtf_bytes, mockup_bytes
+
+    # ------------------------------------------------------------------
+    # Общий строительный блок промпта
+    # ------------------------------------------------------------------
+
+    def _build_car_prompt(
+        self,
+        tshirt_color: str,
+        license_plate: str | None,
+        custom_text: str | None,
+    ) -> tuple[str, str, str]:
+        """Возвращает (shirt_contrast, plate_instruction, text_instruction)."""
         shirt_contrast = (
             "Принт рассчитан на тёмную ткань: яркие цвета, светлые блики, "
             "текст белый или светлый."
@@ -64,7 +72,6 @@ class AIGenerator:
             "глубокие тени, текст чёрный или тёмный."
         )
 
-        # Гос. номер
         if license_plate:
             plate_instruction = (
                 f"Государственный номер «{license_plate}» должен быть чётко виден "
@@ -77,7 +84,6 @@ class AIGenerator:
                 "сохрани его точно как есть, вместе с флагом на знаке."
             )
 
-        # Текст на принте — только если задан, иначе ничего
         if custom_text:
             text_instruction = (
                 f"В нижней части принта, под машиной — ОДИН раз жирный стилизованный текст: "
@@ -88,47 +94,122 @@ class AIGenerator:
         else:
             text_instruction = "Текст и надписи на принте отсутствуют."
 
+        return shirt_contrast, plate_instruction, text_instruction
+
+    # ------------------------------------------------------------------
+    # DTF принт-файл А3
+    # ------------------------------------------------------------------
+
+    async def _generate_kieai_dtf(
+        self,
+        source_image_url: str,
+        tshirt_color: str = "white",
+        license_plate: str | None = None,
+        custom_text: str | None = None,
+    ) -> bytes:
+        """Генерирует DTF принт-файл А3 (3:4, 2K, прозрачный фон, свободная форма)."""
+        shirt_contrast, plate_instruction, text_instruction = self._build_car_prompt(
+            tshirt_color, license_plate, custom_text
+        )
+
         prompt = (
-            # Задача: DTF принт-файл формата А3
             "Создай DTF принт-файл формата А3 (портрет, соотношение сторон 3:4) "
             "для нанесения на футболку.\n"
 
-            # Форма принта — свободная, без рамки, прозрачный фон
             "ВАЖНО: принт не имеет прямоугольной рамки и прямоугольного фона. "
             "Края принта повторяют силуэт самой иллюстрации — свободная форма. "
             "Всё пространство вне иллюстрации — полностью прозрачное "
             "(без белого, серого или любого цветного прямоугольного фона). "
             "Только сам рисунок без подложки.\n"
 
-            # Автомобиль — точно как на фото, без тюнинга, без смены ракурса
             "Центральный элемент — автомобиль, нарисованный как художественная иллюстрация: "
             "жирные контуры, высокий контраст, кинематографическое освещение. "
             "Сохрани точно марку, модель, цвет кузова, диски, фары, ракурс съёмки "
             "и все детали точно как на исходном фото — без изменений и без тюнинга. "
             "Авто занимает большую часть принта, виден полностью, по центру.\n"
 
-            # Фон за машиной — окружение из исходного фото в стиле иллюстрации
             "Фон за автомобилем: воспроизведи окружение с исходного фото "
             "(дорога, парковка, улица, природа и т.д.) "
             "в том же художественном стиле иллюстрации — "
             "жирные контуры, высокий контраст, без фотореализма.\n"
 
-            # Гос. номер
             f"{plate_instruction}\n"
-
-            # Текст
             f"{text_instruction}\n"
-
-            # Контраст под цвет футболки
             f"{shirt_contrast}\n"
 
-            # Качество
             "Качество готово к DTF-печати: чёткие края, детализированный рисунок, "
             "PNG с прозрачным фоном за пределами иллюстрации."
         )
 
-        logger.debug("KIE.AI prompt ({} chars)", len(prompt))
+        logger.debug("KIE.AI DTF prompt ({} chars)", len(prompt))
+        return await self._kieai_request(
+            source_image_url=source_image_url,
+            prompt=prompt,
+            aspect_ratio="3:4",
+            resolution="2K",
+            task_label="DTF",
+        )
 
+    # ------------------------------------------------------------------
+    # Мокап футболки
+    # ------------------------------------------------------------------
+
+    async def _generate_kieai_mockup(
+        self,
+        source_image_url: str,
+        tshirt_color: str = "white",
+        license_plate: str | None = None,
+        custom_text: str | None = None,
+    ) -> bytes:
+        """Генерирует фотореалистичный мокап футболки с принтом (3:4, 1K)."""
+        shirt_contrast, plate_instruction, text_instruction = self._build_car_prompt(
+            tshirt_color, license_plate, custom_text
+        )
+        color_ru = "чёрная" if tshirt_color == "black" else "белая"
+
+        prompt = (
+            f"Создай фотореалистичный мокап: {color_ru} футболка, вид спереди, "
+            "футболка аккуратно лежит на плоской поверхности или надета на манекен. "
+            "На груди футболки — яркий художественный принт с автомобилем с исходного фото. "
+            "Принт занимает большую часть груди и чётко виден.\n"
+
+            "Принт на футболке:\n"
+            "Центральный элемент принта — автомобиль, нарисованный как художественная иллюстрация: "
+            "жирные контуры, высокий контраст, кинематографическое освещение. "
+            "Сохрани точно марку, модель, цвет кузова, диски, фары, ракурс съёмки "
+            "и все детали точно как на исходном фото — без изменений и без тюнинга.\n"
+
+            f"{plate_instruction}\n"
+            f"{text_instruction}\n"
+            f"{shirt_contrast}\n"
+
+            "Футболка видна полностью от воротника до низа. "
+            "Фон — нейтральный белый или светло-серый. "
+            "Фотографическое качество мокапа, реалистичные складки ткани."
+        )
+
+        logger.debug("KIE.AI mockup prompt ({} chars)", len(prompt))
+        return await self._kieai_request(
+            source_image_url=source_image_url,
+            prompt=prompt,
+            aspect_ratio="3:4",
+            resolution="1K",
+            task_label="mockup",
+        )
+
+    # ------------------------------------------------------------------
+    # Низкоуровневый хелпер: создание задачи + polling
+    # ------------------------------------------------------------------
+
+    async def _kieai_request(
+        self,
+        source_image_url: str,
+        prompt: str,
+        aspect_ratio: str = "3:4",
+        resolution: str = "2K",
+        task_label: str = "task",
+    ) -> bytes:
+        """Создаёт задачу KIE.AI и опрашивает до получения результата."""
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config.KIE_AI_API_KEY}",
@@ -138,9 +219,9 @@ class AIGenerator:
             "input": {
                 "prompt": prompt,
                 "image_input": [source_image_url],
-                "aspect_ratio": "3:4",
+                "aspect_ratio": aspect_ratio,
                 "google_search": False,
-                "resolution": "2K",
+                "resolution": resolution,
                 "output_format": "png",
             },
         }
@@ -153,20 +234,20 @@ class AIGenerator:
             )
             if resp.status_code != 200:
                 raise AIGenerationError(
-                    f"KIE.AI createTask error {resp.status_code}: {resp.text}"
+                    f"KIE.AI createTask [{task_label}] error {resp.status_code}: {resp.text}"
                 )
             data = resp.json()
 
         task_id = data.get("data", {}).get("taskId")
         if not task_id:
-            raise AIGenerationError(f"KIE.AI: не получен taskId. Ответ: {data}")
+            raise AIGenerationError(f"KIE.AI [{task_label}]: не получен taskId. Ответ: {data}")
 
-        logger.info("KIE.AI task created: {}", task_id)
+        logger.info("KIE.AI {} task created: {}", task_label, task_id)
 
         poll_headers = {"Authorization": f"Bearer {config.KIE_AI_API_KEY}"}
         max_wait = 300
         interval = 5
-        elapsed = 0
+        elapsed  = 0
 
         async with httpx.AsyncClient(timeout=30) as client:
             while elapsed < max_wait:
@@ -179,25 +260,33 @@ class AIGenerator:
                     headers=poll_headers,
                 )
                 if poll_resp.status_code != 200:
-                    logger.warning("KIE.AI poll {}: {}", poll_resp.status_code, poll_resp.text)
+                    logger.warning(
+                        "KIE.AI {} poll {}: {}", task_label, poll_resp.status_code, poll_resp.text
+                    )
                     continue
 
                 task = poll_resp.json().get("data", {})
                 state = task.get("state", "")
-                logger.debug("KIE.AI task {} state={}, elapsed={}s", task_id, state, elapsed)
+                logger.debug(
+                    "KIE.AI {} task {} state={}, elapsed={}s", task_label, task_id, state, elapsed
+                )
 
                 if state == "success":
                     result = _json.loads(task.get("resultJson", "{}"))
                     urls = result.get("resultUrls", [])
                     if not urls:
-                        raise AIGenerationError("KIE.AI: задача завершена, но resultUrls пуст.")
+                        raise AIGenerationError(
+                            f"KIE.AI [{task_label}]: задача завершена, но resultUrls пуст."
+                        )
                     img_resp = await client.get(urls[0])
                     img_resp.raise_for_status()
-                    logger.info("KIE.AI generation completed, {} bytes", len(img_resp.content))
+                    logger.info("KIE.AI {} completed, {} bytes", task_label, len(img_resp.content))
                     return img_resp.content
 
                 elif state in ("failed", "cancelled", "error"):
                     fail_msg = task.get("failMsg") or "неизвестная ошибка"
-                    raise AIGenerationError(f"KIE.AI: задача провалилась ({state}): {fail_msg}")
+                    raise AIGenerationError(
+                        f"KIE.AI [{task_label}]: задача провалилась ({state}): {fail_msg}"
+                    )
 
-        raise AIGenerationError("KIE.AI: таймаут ожидания результата (5 минут).")
+        raise AIGenerationError(f"KIE.AI [{task_label}]: таймаут ожидания результата (5 минут).")
