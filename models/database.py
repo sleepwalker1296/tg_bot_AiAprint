@@ -21,6 +21,7 @@ async def init_db() -> None:
         for ddl in (
             "ALTER TABLE orders ADD COLUMN tshirt_color VARCHAR(50)",
             "ALTER TABLE orders ADD COLUMN license_plate VARCHAR(20)",
+            "ALTER TABLE orders ADD COLUMN custom_text VARCHAR(500)",
         ):
             try:
                 await conn.execute(text(ddl))

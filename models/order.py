@@ -39,6 +39,8 @@ class Order(Base):
     tshirt_color: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Гос. номер автомобиля (опционально)
     license_plate: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Произвольный текст на принт (опционально)
+    custom_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # МойСклад
     moysklad_order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

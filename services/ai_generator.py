@@ -1,101 +1,18 @@
 """
-Генерация дизайна принта для футболки через AI API.
-Поддерживает: OpenAI DALL-E 3, Stability AI, Replicate, KIE.AI Nano Banana 2.
+Генерация дизайна принта для футболки через KIE.AI Nano Banana 2.
 """
-import base64
-import io
 import json as _json
 from pathlib import Path
 
-import aiohttp
 import httpx
 from loguru import logger
 
 import config
 
 
-# ---------------------------------------------------------------------------
-# Словарь слоганов по маркам авто (русский, 2 строки)
-# ---------------------------------------------------------------------------
-
-# Ключи в нижнем регистре, включая русские варианты написания
-_BRAND_SLOGANS: list[tuple[list[str], tuple[str, str]]] = [
-    (["bmw", "бмв"],                        ("ПРОСТО BMW",          "ЭТИМ ВСЁ СКАЗАНО")),
-    (["mercedes", "мерседес", "мерс"],      ("MERCEDES",            "НЕ ТРЕБУЕТ ПОЯСНЕНИЙ")),
-    (["toyota", "тойота"],                  ("УМИРАТЬ УМЕЕТ",       "НО НЕ ХОЧЕТ")),
-    (["lada", "лада", "ваз", "vaz"],        ("РОССИЙСКИЙ ОРИГИНАЛ", "БЕЗ АНАЛОГОВ")),
-    (["volkswagen", "vw", "фольксваген"],   ("СДЕЛАНО В ГЕРМАНИИ",  "ЛЮБЯТ В ДУШЕ")),
-    (["audi", "ауди"],                      ("ЧЕТЫРЕ КОЛЬЦА",       "ОДНА ЛЮБОВЬ")),
-    (["ford", "форд"],                      ("FORD НЕ ЕДЕТ",        "FORD ЛЕТИТ")),
-    (["nissan", "ниссан"],                  ("ДРИФТ В КРОВИ",       "С ЗАВОДА")),
-    (["subaru", "субару"],                  ("BOXER ЗВУЧИТ",        "ИЗ СЕРДЦА")),
-    (["honda", "хонда"],                    ("VTEC ВКЛЮЧИЛСЯ",      "ПОЧУВСТВУЙ")),
-    (["mazda", "мазда"],                    ("ZOOM-ZOOM",           "НАВСЕГДА")),
-    (["kia", "киа"],                        ("РАНЬШЕ",              "НЕ УВАЖАЛИ")),
-    (["hyundai", "хёндэ", "хундай"],        ("КОРЕЯ",               "ОТВЕТИЛА")),
-    (["porsche", "порше"],                  ("НЕ ДЛЯ ВСЕХ",         "ДЛЯ СВОИХ")),
-    (["range rover", "рендж ровер"],        ("СЕРВИС КАЖДЫЙ ДЕНЬ",  "ЭТО НОРМАЛЬНО")),
-    (["land rover", "ленд ровер"],          ("БЕЗДОРОЖЬЕ",          "ЭТО ДОМ")),
-    (["jeep", "джип"],                      ("ДОРОГИ НЕ НУЖНЫ",     "СЕРЬЁЗНО")),
-    (["volvo", "вольво"],                   ("ШВЕДЫ ЗНАЮТ",         "КАК ВЫЖИТЬ")),
-    (["renault", "рено"],                   ("ФРАНЦУЗСКИЙ ХАРАКТЕР","НЕ ЛЕЧИТСЯ")),
-    (["peugeot", "пежо"],                   ("ФРАНЦУЗСКИЙ СТИЛЬ",   "ФРАНЦУЗСКИЕ НЕРВЫ")),
-    (["citroen", "ситроен"],                ("ФРАНЦУЗЫ СНОВА",      "УДИВЛЯЮТ")),
-    (["mitsubishi", "мицубиси"],            ("EVO ЖИВ",             "В КАЖДОМ ИЗ НАС")),
-    (["lexus", "лексус"],                   ("ЯПОНСКАЯ РОСКОШЬ",    "БЕЗ ИЗВИНЕНИЙ")),
-    (["infiniti", "инфинити"],              ("РОСКОШЬ",             "В ДЕТАЛЯХ")),
-    (["chevrolet", "шевроле"],              ("ШЕВИК",               "НАРОДНЫЙ ВЫБОР")),
-    (["dodge", "додж"],                     ("АМЕРИКАНСКАЯ",        "НЕВМЕНЯЕМОСТЬ")),
-    (["tesla", "тесла"],                    ("ТИХО",                "НО БЫСТРО")),
-    (["lamborghini", "ламборгини"],         ("КОГДА ТИХО",          "НЕ ВАРИАНТ")),
-    (["ferrari", "феррари"],                ("КРАСНЫЙ",             "ЕДИНСТВЕННЫЙ ЦВЕТ")),
-    (["maserati", "мазерати"],              ("ЗВУК",                "КОТОРЫЙ ПОМНЯТ")),
-    (["alfa romeo", "альфа ромео"],         ("ИТАЛЬЯНСКИЙ ТЕМПЕРАМЕНТ", "ИТАЛЬЯНСКАЯ НАДЁЖНОСТЬ")),
-    (["suzuki", "сузуки"],                  ("МАЛЕНЬКИЙ",           "НО ЗЛОЙ")),
-    (["skoda", "шкода"],                    ("ПРОСТО РАБОТАЕТ",     "БЕЗ ЛИШНИХ СЛОВ")),
-    (["opel", "опель"],                     ("НЕМЕЦ",               "С ДУШОЙ")),
-    (["mini", "мини"],                      ("МАЛЕНЬКИЙ СНАРУЖИ",   "БОЛЬШОЙ ВНУТРИ")),
-    (["rolls-royce", "rolls royce", "роллс ройс"], ("КОГДА ВСЁ ОСТАЛЬНОЕ", "ЭТО НЕ ROLLS")),
-    (["bentley", "бентли"],                 ("СКОРОСТЬ",            "С ДОСТОИНСТВОМ")),
-    (["aston martin", "астон мартин"],      ("ДЖЕЙМС БОНд",        "ОДОБРИЛ БЫ")),
-    (["jaguar", "ягуар"],                   ("БРИТАНСКАЯ КРОВЬ",    "НИКОГДА НЕ ОСТЫНЕТ")),
-    (["uaz", "уаз"],                        ("УАЗ ЕДЕТ",            "КОГДА ВСЕ ЗАСТРЯЛИ")),
-    (["haval", "хавал"],                    ("КИТАЙ",               "УДИВЛЯЕТ")),
-    (["chery", "чери"],                     ("ЧЕМ НЕ ЯПОНЕЦ",       "ВОПРОС ОТКРЫТ")),
-    (["geely", "джили"],                    ("БУДУЩЕЕ",             "УЖЕ ЗДЕСЬ")),
-    (["genesis", "дженезис"],               ("КОРЕЯ",               "ВЫРОСЛА")),
-    (["cadillac", "кадиллак"],              ("AMERICAN DREAM",      "НА КОЛЁСАХ")),
-    (["lincoln", "линкольн"],               ("АМЕРИКАНСКАЯ РОСКОШЬ","ДЛЯ ВСЕХ")),
-    (["volga", "волга", "газ"],             ("СОВЕТСКАЯ КЛАССИКА",  "ВЕЧНЫЙ СТИЛЬ")),
-    (["москвич", "moskvich"],               ("МОСКВИЧ ВЕРНУЛСЯ",    "МОСКВА В ШОКЕ")),
-]
-
-_DEFAULT_SLOGAN: tuple[str, str] = ("ТВОЙ АВТОМОБИЛЬ", "ТВОЙ ПРИНТ")
-
-
-def get_slogan_for_car(car_brand: str) -> tuple[str, str]:
-    """Возвращает пару строк слогана по введённой марке авто."""
-    if not car_brand:
-        return _DEFAULT_SLOGAN
-    text = car_brand.lower()
-    for keys, slogan in _BRAND_SLOGANS:
-        for key in keys:
-            if key in text:
-                return slogan
-    return _DEFAULT_SLOGAN
-
-
-# ---------------------------------------------------------------------------
-# Ошибка генерации
-# ---------------------------------------------------------------------------
-
 class AIGenerationError(Exception):
     """Ошибка генерации изображения."""
 
-
-# ---------------------------------------------------------------------------
-# Основной класс генератора
-# ---------------------------------------------------------------------------
 
 class AIGenerator:
 
@@ -105,32 +22,23 @@ class AIGenerator:
         source_image_url: str = "",
         tshirt_color: str = "white",
         license_plate: str | None = None,
-        car_brand: str = "",
+        custom_text: str | None = None,
     ) -> bytes:
         """
         source_image_url — публичный URL для KIE.AI.
         tshirt_color     — 'white' или 'black'.
-        license_plate    — гос. номер (опционально).
-        car_brand        — марка/модель авто для подбора слогана.
+        license_plate    — гос. номер (введён пользователем, опционально).
+        custom_text      — произвольный текст на принт (опционально).
         """
-        provider = config.AI_PROVIDER.lower()
-        logger.info(
-            "Generating via provider={}, color={}, plate={}, brand={}",
-            provider, tshirt_color, license_plate, car_brand,
-        )
-
-        if provider == "openai":
-            return await self._generate_openai(source_image_path)
-        elif provider == "stability":
-            return await self._generate_stability(source_image_path)
-        elif provider == "replicate":
-            return await self._generate_replicate(source_image_path)
-        elif provider == "kieai":
-            return await self._generate_kieai(
-                source_image_url, tshirt_color, license_plate, car_brand
+        if config.AI_PROVIDER.lower() != "kieai":
+            raise AIGenerationError(
+                f"Поддерживается только AI_PROVIDER=kieai, получен: {config.AI_PROVIDER}"
             )
-        else:
-            raise AIGenerationError(f"Неизвестный AI_PROVIDER: {provider}")
+        logger.info(
+            "Generating via KIE.AI, color={}, plate={}, text={}",
+            tshirt_color, license_plate, custom_text,
+        )
+        return await self._generate_kieai(source_image_url, tshirt_color, license_plate, custom_text)
 
     # ------------------------------------------------------------------
     # KIE.AI Nano Banana 2
@@ -141,17 +49,13 @@ class AIGenerator:
         source_image_url: str,
         tshirt_color: str = "white",
         license_plate: str | None = None,
-        car_brand: str = "",
+        custom_text: str | None = None,
     ) -> bytes:
         import asyncio
 
         if not source_image_url:
             raise AIGenerationError("KIE.AI: не передан source_image_url.")
 
-        # Слоган
-        slogan_line1, slogan_line2 = get_slogan_for_car(car_brand)
-
-        # Цвет футболки на русском
         shirt_ru = "чёрной" if tshirt_color == "black" else "белой"
         shirt_contrast = (
             "Принт рассчитан на тёмную ткань: яркие цвета, светлые блики, "
@@ -164,48 +68,59 @@ class AIGenerator:
         # Гос. номер
         if license_plate:
             plate_instruction = (
-                f"Сохрани государственный номер «{license_plate}» на номерном знаке автомобиля "
-                f"вместе с флагом страны на номере — точно как в оригинале."
+                f"Государственный номер «{license_plate}» должен быть чётко виден "
+                f"на номерном знаке автомобиля вместе с флагом страны на знаке — "
+                f"точно как в оригинале, без изменений."
             )
         else:
             plate_instruction = (
-                "Если на фото виден государственный номер — сохрани его вместе с флагом на знаке."
+                "Если на исходном фото виден государственный номер — "
+                "сохрани его точно как есть, вместе с флагом на знаке."
             )
 
+        # Текст на принте — только если задан, иначе ничего
+        if custom_text:
+            text_instruction = (
+                f"В нижней части принта, под машиной — ОДИН раз жирный стилизованный текст: "
+                f"«{custom_text}». "
+                f"Текст размещается строго один раз, не повторяется нигде. "
+                f"Шрифт широкий, заглавный."
+            )
+        else:
+            text_instruction = "Текст и надписи на принте отсутствуют."
+
         prompt = (
-            # Общая задача
-            "Создай фотореалистичный мокап футболки с авто-принтом.\n"
+            # Задача: мокап футболки
+            f"Создай фотореалистичный мокап {shirt_ru} футболки с авто-принтом.\n"
 
             # Футболка — полностью в кадре
             f"Покажи полностью {shirt_ru} футболку: воротник сверху, "
-            f"оба рукава по бокам, подол снизу — без обрезки. "
-            f"Чистый студийный фон за футболкой.\n"
+            f"оба рукава по бокам, подол снизу — без обрезки по краям. "
+            f"Чистый студийный фон позади футболки.\n"
 
             # Принт на груди
             "На передней части футболки по центру — авто-принт:\n"
 
-            # Автомобиль
-            "Автомобиль нарисован как смелая художественная иллюстрация — "
-            "жирные контуры, высокий контраст, кинематографическое освещение с глубокими тенями. "
-            "Сохрани точно: марку, модель, цвет кузова, диски, фары и все характерные детали "
-            "без изменений и без тюнинга. "
-            "Авто занимает большую часть принта, полностью виден, по центру.\n"
+            # Автомобиль — точно как на фото, без тюнинга, без смены ракурса
+            "Автомобиль нарисован как художественная иллюстрация: "
+            "жирные контуры, высокий контраст, кинематографическое освещение. "
+            "Сохрани точно марку, модель, цвет кузова, диски, фары, ракурс съёмки "
+            "и все детали точно как на исходном фото — без изменений и без тюнинга. "
+            "Авто занимает большую часть принта, виден полностью, по центру.\n"
 
-            # Фон принта — из референс-фото, отрисованный в стиле иллюстрации
-            "Фон на принте — воспроизведи окружение с оригинального фото клиента "
-            "(улица, парковка, природа и т.д.), но отрисованный в том же художественном стиле "
-            "иллюстрации, что и автомобиль: жирные контуры, высокий контраст, без фотореализма.\n"
+            # Фон принта — окружение из исходного фото в стиле иллюстрации
+            "Фон принта: воспроизведи окружение с исходного фото "
+            "(дорога, парковка, улица, природа и т.д.) "
+            "в том же художественном стиле, что и автомобиль — "
+            "жирные контуры, высокий контраст, без фотореализма.\n"
 
             # Гос. номер
             f"{plate_instruction}\n"
 
-            # Слоган — строго один раз, внизу принта
-            f"В нижней части принта, под машиной — ОДИН раз жирный стилизованный текст "
-            f"в две строки: первая строка «{slogan_line1}», вторая строка «{slogan_line2}». "
-            f"Текст размещается только один раз, не повторяется. "
-            f"Шрифт широкий, заглавный, в стиле авто-брендов.\n"
+            # Текст
+            f"{text_instruction}\n"
 
-            # Контраст под цвет
+            # Контраст под цвет футболки
             f"{shirt_contrast}\n"
 
             # Качество
@@ -213,7 +128,6 @@ class AIGenerator:
         )
 
         logger.debug("KIE.AI prompt ({} chars)", len(prompt))
-        logger.debug("Slogan: {} / {}", slogan_line1, slogan_line2)
 
         headers = {
             "Content-Type": "application/json",
@@ -265,7 +179,7 @@ class AIGenerator:
                     headers=poll_headers,
                 )
                 if poll_resp.status_code != 200:
-                    logger.warning("KIE.AI poll error {}: {}", poll_resp.status_code, poll_resp.text)
+                    logger.warning("KIE.AI poll {}: {}", poll_resp.status_code, poll_resp.text)
                     continue
 
                 task = poll_resp.json().get("data", {})
@@ -277,7 +191,6 @@ class AIGenerator:
                     urls = result.get("resultUrls", [])
                     if not urls:
                         raise AIGenerationError("KIE.AI: задача завершена, но resultUrls пуст.")
-
                     img_resp = await client.get(urls[0])
                     img_resp.raise_for_status()
                     logger.info("KIE.AI generation completed, {} bytes", len(img_resp.content))
@@ -288,127 +201,3 @@ class AIGenerator:
                     raise AIGenerationError(f"KIE.AI: задача провалилась ({state}): {fail_msg}")
 
         raise AIGenerationError("KIE.AI: таймаут ожидания результата (5 минут).")
-
-    # ------------------------------------------------------------------
-    # OpenAI DALL-E 3
-    # ------------------------------------------------------------------
-
-    async def _generate_openai(self, source_image_path: Path) -> bytes:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-
-        with open(source_image_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode("utf-8")
-
-        vision_response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}", "detail": "high"},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Опиши автомобиль для принта на футболку: "
-                            "марка, модель, цвет, характерные черты. "
-                            "Кратко и точно."
-                        ),
-                    },
-                ],
-            }],
-            max_tokens=300,
-        )
-        car_description = vision_response.choices[0].message.content
-        logger.debug("Car description: {}", car_description)
-
-        prompt = (
-            f"Мокап белой футболки, полностью в кадре: воротник, оба рукава, подол. "
-            f"Принт на груди: {car_description}. "
-            f"Стиль: авто-аппарель, жирные контуры, высокий контраст. "
-            f"Без людей, без лишних логотипов."
-        )
-
-        dalle_response = await client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="hd",
-            n=1,
-            response_format="b64_json",
-        )
-
-        image_bytes = base64.b64decode(dalle_response.data[0].b64_json)
-        logger.info("OpenAI generation completed, {} bytes", len(image_bytes))
-        return image_bytes
-
-    # ------------------------------------------------------------------
-    # Stability AI
-    # ------------------------------------------------------------------
-
-    async def _generate_stability(self, source_image_path: Path) -> bytes:
-        url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image"
-
-        with open(source_image_path, "rb") as f:
-            image_data = f.read()
-
-        async with aiohttp.ClientSession() as session:
-            form_data = aiohttp.FormData()
-            form_data.add_field("init_image", image_data, content_type="image/jpeg")
-            form_data.add_field("init_image_mode", "IMAGE_STRENGTH")
-            form_data.add_field("image_strength", "0.35")
-            form_data.add_field("text_prompts[0][text]", config.AI_PROMPT_TEMPLATE)
-            form_data.add_field("text_prompts[0][weight]", "1")
-            form_data.add_field("text_prompts[1][text]", "blurry, low quality, watermark")
-            form_data.add_field("text_prompts[1][weight]", "-1")
-            form_data.add_field("cfg_scale", "7")
-            form_data.add_field("steps", "30")
-            form_data.add_field("samples", "1")
-
-            async with session.post(
-                url,
-                data=form_data,
-                headers={"Authorization": f"Bearer {config.STABILITY_API_KEY}"},
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise AIGenerationError(f"Stability AI error {resp.status}: {text}")
-                result = await resp.json()
-
-        image_bytes = base64.b64decode(result["artifacts"][0]["base64"])
-        logger.info("Stability AI generation completed, {} bytes", len(image_bytes))
-        return image_bytes
-
-    # ------------------------------------------------------------------
-    # Replicate
-    # ------------------------------------------------------------------
-
-    async def _generate_replicate(self, source_image_path: Path) -> bytes:
-        import replicate  # type: ignore
-
-        with open(source_image_path, "rb") as f:
-            image_data = f.read()
-
-        image_b64 = base64.b64encode(image_data).decode("utf-8")
-        client = replicate.Client(api_token=config.REPLICATE_API_TOKEN)
-        output = await client.async_run(
-            "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
-            input={
-                "image": f"data:image/jpeg;base64,{image_b64}",
-                "prompt": config.AI_PROMPT_TEMPLATE,
-                "negative_prompt": "blurry, low quality, watermark",
-                "prompt_strength": 0.8,
-                "num_inference_steps": 30,
-            },
-        )
-
-        image_url = output[0] if isinstance(output, list) else output
-        async with httpx.AsyncClient() as http:
-            response = await http.get(str(image_url))
-            response.raise_for_status()
-
-        logger.info("Replicate generation completed")
-        return response.content
