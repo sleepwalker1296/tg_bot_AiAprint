@@ -266,7 +266,8 @@ async def _run_generation_pipeline(
             db_order.original_photo_path = str(original_path)
             await session.commit()
 
-        generated_bytes = await _ai_generator.generate(
+        # 1 вызов KIE.AI → DTF принт (только принт, прозрачный фон, без футболки)
+        dtf_bytes = await _ai_generator.generate(
             original_path,
             source_image_url=tg_file_url,
             tshirt_color=color_key,
@@ -274,16 +275,22 @@ async def _run_generation_pipeline(
             custom_text=custom_text,
         )
 
-        generated_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
-        _image_processor.save_original(generated_bytes, generated_path)
+        dtf_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
+        _image_processor.save_dtf(dtf_bytes, dtf_path)
 
-        preview_bytes = _image_processor.create_preview(generated_path)
+        # PIL накладывает принт на шаблон футболки → мокап для клиента
+        mockup_bytes = _image_processor.create_mockup(dtf_bytes, color_key)
+        mockup_path  = config.ORDERS_DIR / f"order_{order_id:05d}_mockup.jpg"
+        mockup_path.write_bytes(mockup_bytes)
+
+        # Превью для клиента = мокап + водяной знак + размытие
+        preview_bytes = _image_processor.create_preview(mockup_path)
         preview_path  = config.ORDERS_DIR / f"order_{order_id:05d}_preview.jpg"
         preview_path.write_bytes(preview_bytes)
 
         async with async_session() as session:
             db_order = await session.get(Order, order_id)
-            db_order.generated_image_path = str(generated_path)
+            db_order.generated_image_path = str(dtf_path)
             db_order.preview_image_path   = str(preview_path)
             db_order.status = OrderStatus.PREVIEW_SENT
             await session.commit()
@@ -302,7 +309,7 @@ async def _run_generation_pipeline(
             chat_id=user.id,
             photo=io.BytesIO(preview_bytes),
             caption=(
-                f"🎨 *Дизайн на {color_ru} футболке готов!*"
+                f"🎨 *Мокап на {color_ru} футболке готов!*"
                 f"{plate_line}{text_line}\n\n"
                 "👆 Предварительный просмотр с водяным знаком.\n"
                 "После оформления заказа — финальный файл в высоком качестве.\n\n"
@@ -313,7 +320,7 @@ async def _run_generation_pipeline(
         )
 
         await _notify_admins(context, order_id, user, color_ru, custom_text, plate,
-                             generated_path, original_path)
+                             dtf_path, mockup_path, original_path)
 
     except AIGenerationError as exc:
         logger.error("AI generation failed for order {}: {}", order_id, exc)
@@ -445,27 +452,28 @@ async def _notify_admins(
     color_ru: str,
     custom_text: str | None,
     plate: str | None,
-    generated_path: Path,
+    dtf_path: Path,
+    mockup_path: Path,
     original_path: Path,
 ) -> None:
     if not config.ADMIN_IDS:
         return
 
-    generated_bytes = _image_processor.get_original_bytes(generated_path)
-    original_bytes  = _image_processor.get_original_bytes(original_path)
+    dtf_bytes      = _image_processor.get_dtf_bytes(dtf_path)       # RGBA, прозрачный фон
+    mockup_bytes   = Path(mockup_path).read_bytes()                  # JPEG мокап
+    original_bytes = _image_processor.get_original_bytes(original_path)
 
     username   = (user.username   or "нет").replace("_", "\\_")
     first_name = (user.first_name or "").replace("_", "\\_")
     text_line  = f"\n✍️ Текст: {custom_text}" if custom_text else ""
     plate_line = f"\n🔢 Гос. номер: `{plate}`" if plate else ""
 
-    caption = (
+    info_caption = (
         f"🆕 *Новый заказ #{order_id:05d}*\n\n"
         f"👤 @{username} ({first_name})\n"
         f"🆔 TG ID: `{user.id}`\n"
         f"👕 Цвет: {color_ru}"
-        f"{text_line}{plate_line}\n\n"
-        f"📎 Оригинальный дизайн (без водяного знака)"
+        f"{text_line}{plate_line}"
     )
 
     for admin_id in config.ADMIN_IDS:
@@ -476,11 +484,17 @@ async def _notify_admins(
                 caption=f"📷 *Исходное фото* (заказ #{order_id:05d})",
                 parse_mode="Markdown",
             )
+            await context.bot.send_photo(
+                chat_id=admin_id,
+                photo=io.BytesIO(mockup_bytes),
+                caption=f"👕 *Мокап футболки* (заказ #{order_id:05d})",
+                parse_mode="Markdown",
+            )
             await context.bot.send_document(
                 chat_id=admin_id,
-                document=io.BytesIO(generated_bytes),
-                filename=f"order_{order_id:05d}_design_HQ.png",
-                caption=caption,
+                document=io.BytesIO(dtf_bytes),
+                filename=f"order_{order_id:05d}_DTF_A3.png",
+                caption=info_caption + "\n\n📎 DTF принт-файл А3 (без водяного знака)",
                 parse_mode="Markdown",
             )
             logger.debug("Admin {} notified about order {}", admin_id, order_id)

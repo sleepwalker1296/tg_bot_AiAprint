@@ -1,5 +1,5 @@
 """
-Обработка изображений: создание превью с водяным знаком и размытием.
+Обработка изображений: создание превью с водяным знаком, мокап футболки через PIL.
 """
 import io
 from pathlib import Path
@@ -8,6 +8,17 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 from loguru import logger
 
 import config
+
+# ---------------------------------------------------------------------------
+# Параметры зоны принта А3 на футболке (в долях размера шаблона)
+# ---------------------------------------------------------------------------
+# Принт занимает 44 % ширины шаблона, центр по горизонтали — посередине,
+# центр по вертикали — 40 % от верха (грудь).
+_PRINT_CENTER_X = 0.50   # горизонтальный центр зоны принта
+_PRINT_CENTER_Y = 0.40   # вертикальный центр зоны принта (грудь)
+_PRINT_WIDTH_RATIO = 0.44  # ширина принта = 44 % ширины шаблона
+# Соотношение сторон А3 portrait: 297 мм × 420 мм → высота = ширина × 420/297
+_A3_HEIGHT_RATIO = 420 / 297
 
 
 class ImageProcessor:
@@ -50,6 +61,14 @@ class ImageProcessor:
         logger.debug("Original saved to {}", dest)
         return dest
 
+    def save_dtf(self, dtf_bytes: bytes, dest: Path) -> Path:
+        """Сохраняет DTF PNG с прозрачным фоном (RGBA сохраняется)."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(io.BytesIO(dtf_bytes)) as img:
+            img.convert("RGBA").save(dest, format="PNG", optimize=False)
+        logger.debug("DTF saved to {}", dest)
+        return dest
+
     def get_original_bytes(self, image_path: Path) -> bytes:
         """Читает оригинальное изображение и возвращает PNG-байты без потерь."""
         with Image.open(image_path) as img:
@@ -57,6 +76,88 @@ class ImageProcessor:
             img.convert("RGB").save(buffer, format="PNG")
             buffer.seek(0)
             return buffer.getvalue()
+
+    def get_dtf_bytes(self, dtf_path: Path) -> bytes:
+        """Читает DTF PNG с прозрачным фоном (RGBA)."""
+        with Image.open(dtf_path) as img:
+            buffer = io.BytesIO()
+            img.convert("RGBA").save(buffer, format="PNG")
+            buffer.seek(0)
+            return buffer.getvalue()
+
+    def create_mockup(self, dtf_bytes: bytes, shirt_color: str = "white") -> bytes:
+        """
+        Накладывает DTF принт на шаблон футболки формата А3.
+
+        Принт (3:4 / A3) масштабируется до 44 % ширины шаблона,
+        центрируется горизонтально и размещается на уровне груди (40 % сверху).
+        Возвращает JPEG-байты мокапа (макс. 1 500 px по длинной стороне).
+        """
+        template_path = config.ASSETS_DIR / f"{shirt_color}_shirt.png"
+        if not template_path.exists():
+            logger.warning("Shirt template not found: {}", template_path)
+            # Возвращаем принт на цветном фоне как запасной вариант
+            return self._dtf_on_plain_bg(dtf_bytes, shirt_color)
+
+        with Image.open(template_path) as tpl:
+            shirt = tpl.convert("RGBA")
+
+        sw, sh = shirt.size
+
+        # Размер зоны принта А3
+        zone_w = int(sw * _PRINT_WIDTH_RATIO)
+        zone_h = int(zone_w * _A3_HEIGHT_RATIO)
+
+        # Верхний левый угол зоны принта
+        px = int(sw * _PRINT_CENTER_X) - zone_w // 2
+        py = int(sh * _PRINT_CENTER_Y) - zone_h // 2
+        # Не выходим за пределы шаблона
+        px = max(0, px)
+        py = max(0, py)
+
+        with Image.open(io.BytesIO(dtf_bytes)) as dtf_img:
+            dtf = dtf_img.convert("RGBA")
+            dtf_scaled = dtf.resize((zone_w, zone_h), Image.LANCZOS)
+
+        # Накладываем принт через альфа-канал принта
+        shirt.paste(dtf_scaled, (px, py), dtf_scaled)
+
+        # Сводим на белый фон
+        result = Image.new("RGB", (sw, sh), (255, 255, 255))
+        result.paste(shirt, mask=shirt.split()[3])
+
+        # Уменьшаем до разумного размера для отправки
+        max_dim = 1500
+        if max(sw, sh) > max_dim:
+            scale = max_dim / max(sw, sh)
+            result = result.resize(
+                (int(sw * scale), int(sh * scale)), Image.LANCZOS
+            )
+
+        buf = io.BytesIO()
+        result.save(buf, format="JPEG", quality=88, optimize=True)
+        buf.seek(0)
+        logger.debug("Mockup created ({}×{}), {} bytes", result.width, result.height, buf.tell())
+        return buf.getvalue()
+
+    def _dtf_on_plain_bg(self, dtf_bytes: bytes, shirt_color: str) -> bytes:
+        """Запасной вариант: принт на сплошном цветном фоне (если шаблон не найден)."""
+        bg_color = (30, 30, 30) if shirt_color == "black" else (245, 245, 245)
+        with Image.open(io.BytesIO(dtf_bytes)) as dtf_img:
+            dtf = dtf_img.convert("RGBA")
+            dw, dh = dtf.size
+            # Добавляем поля 20 %
+            canvas_w = int(dw * 1.4)
+            canvas_h = int(dh * 1.4)
+            canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
+            ox = (canvas_w - dw) // 2
+            oy = (canvas_h - dh) // 2
+            canvas.paste(dtf, (ox, oy), dtf)
+
+        buf = io.BytesIO()
+        canvas.save(buf, format="JPEG", quality=88, optimize=True)
+        buf.seek(0)
+        return buf.getvalue()
 
     # ------------------------------------------------------------------
     # Приватные методы
