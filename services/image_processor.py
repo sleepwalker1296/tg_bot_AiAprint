@@ -62,10 +62,9 @@ class ImageProcessor:
         return dest
 
     def save_dtf(self, dtf_bytes: bytes, dest: Path) -> Path:
-        """Сохраняет DTF PNG с прозрачным фоном (RGBA сохраняется)."""
+        """Сохраняет DTF PNG точными байтами — без обработки, без фона."""
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with Image.open(io.BytesIO(dtf_bytes)) as img:
-            img.convert("RGBA").save(dest, format="PNG", optimize=False)
+        dest.write_bytes(dtf_bytes)
         logger.debug("DTF saved to {}", dest)
         return dest
 
@@ -78,12 +77,8 @@ class ImageProcessor:
             return buffer.getvalue()
 
     def get_dtf_bytes(self, dtf_path: Path) -> bytes:
-        """Читает DTF PNG с прозрачным фоном (RGBA)."""
-        with Image.open(dtf_path) as img:
-            buffer = io.BytesIO()
-            img.convert("RGBA").save(buffer, format="PNG")
-            buffer.seek(0)
-            return buffer.getvalue()
+        """Читает DTF PNG точными байтами — без обработки, без фона."""
+        return dtf_path.read_bytes()
 
     def create_mockup(self, dtf_bytes: bytes, shirt_color: str = "white") -> bytes:
         """
