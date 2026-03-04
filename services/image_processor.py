@@ -4,7 +4,7 @@
 import io
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 from loguru import logger
 
 import config
@@ -96,11 +96,16 @@ class ImageProcessor:
         template_path = config.ASSETS_DIR / f"{shirt_color}_shirt.png"
         if not template_path.exists():
             logger.warning("Shirt template not found: {}", template_path)
-            # Возвращаем принт на цветном фоне как запасной вариант
             return self._dtf_on_plain_bg(dtf_bytes, shirt_color)
 
         with Image.open(template_path) as tpl:
-            shirt = tpl.convert("RGBA")
+            # Если шаблон с прозрачностью — сводим на соответствующий фон
+            if tpl.mode == "RGBA":
+                bg = (20, 20, 20) if shirt_color == "black" else (245, 245, 245)
+                shirt = Image.new("RGB", tpl.size, bg)
+                shirt.paste(tpl.convert("RGB"), mask=tpl.split()[3])
+            else:
+                shirt = tpl.convert("RGB")
 
         sw, sh = shirt.size
 
@@ -111,20 +116,27 @@ class ImageProcessor:
         # Верхний левый угол зоны принта
         px = int(sw * _PRINT_CENTER_X) - zone_w // 2
         py = int(sh * _PRINT_CENTER_Y) - zone_h // 2
-        # Не выходим за пределы шаблона
         px = max(0, px)
         py = max(0, py)
 
         with Image.open(io.BytesIO(dtf_bytes)) as dtf_img:
-            dtf = dtf_img.convert("RGBA")
+            dtf = dtf_img.convert("RGB")
             dtf_scaled = dtf.resize((zone_w, zone_h), Image.LANCZOS)
 
-        # Накладываем принт через альфа-канал принта
-        shirt.paste(dtf_scaled, (px, py), dtf_scaled)
+        # Вырезаем регион футболки под принтом
+        shirt_region = shirt.crop((px, py, px + zone_w, py + zone_h))
 
-        # Сводим на белый фон
-        result = Image.new("RGB", (sw, sh), (255, 255, 255))
-        result.paste(shirt, mask=shirt.split()[3])
+        if shirt_color == "black":
+            # Screen blend: чёрный (#000) фон принта полностью исчезает,
+            # яркие цвета иллюстрации проявляются поверх тёмной ткани.
+            blended = ImageChops.screen(shirt_region, dtf_scaled)
+        else:
+            # Multiply blend: белый (#fff) фон принта полностью исчезает,
+            # тёмные цвета иллюстрации умножаются на светлую ткань.
+            blended = ImageChops.multiply(shirt_region, dtf_scaled)
+
+        shirt.paste(blended, (px, py))
+        result = shirt
 
         # Уменьшаем до разумного размера для отправки
         max_dim = 1500
