@@ -266,7 +266,8 @@ async def _run_generation_pipeline(
             db_order.original_photo_path = str(original_path)
             await session.commit()
 
-        dtf_bytes, mockup_bytes = await _ai_generator.generate(
+        # 1 вызов KIE.AI → DTF принт (только принт, прозрачный фон, без футболки)
+        dtf_bytes = await _ai_generator.generate(
             original_path,
             source_image_url=tg_file_url,
             tshirt_color=color_key,
@@ -274,12 +275,15 @@ async def _run_generation_pipeline(
             custom_text=custom_text,
         )
 
-        dtf_path    = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
-        mockup_path = config.ORDERS_DIR / f"order_{order_id:05d}_mockup.png"
-        _image_processor.save_original(dtf_bytes,    dtf_path)
-        _image_processor.save_original(mockup_bytes, mockup_path)
+        dtf_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
+        _image_processor.save_dtf(dtf_bytes, dtf_path)
 
-        # Превью для клиента делаем из мокапа (футболка с принтом)
+        # PIL накладывает принт на шаблон футболки → мокап для клиента
+        mockup_bytes = _image_processor.create_mockup(dtf_bytes, color_key)
+        mockup_path  = config.ORDERS_DIR / f"order_{order_id:05d}_mockup.jpg"
+        mockup_path.write_bytes(mockup_bytes)
+
+        # Превью для клиента = мокап + водяной знак + размытие
         preview_bytes = _image_processor.create_preview(mockup_path)
         preview_path  = config.ORDERS_DIR / f"order_{order_id:05d}_preview.jpg"
         preview_path.write_bytes(preview_bytes)
@@ -455,8 +459,8 @@ async def _notify_admins(
     if not config.ADMIN_IDS:
         return
 
-    dtf_bytes     = _image_processor.get_original_bytes(dtf_path)
-    mockup_bytes  = _image_processor.get_original_bytes(mockup_path)
+    dtf_bytes      = _image_processor.get_dtf_bytes(dtf_path)       # RGBA, прозрачный фон
+    mockup_bytes   = Path(mockup_path).read_bytes()                  # JPEG мокап
     original_bytes = _image_processor.get_original_bytes(original_path)
 
     username   = (user.username   or "нет").replace("_", "\\_")

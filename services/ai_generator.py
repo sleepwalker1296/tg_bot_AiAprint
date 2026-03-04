@@ -1,6 +1,7 @@
 """
 Генерация дизайна принта для футболки через KIE.AI Nano Banana 2.
-Параллельно создаёт DTF принт-файл А3 и мокап футболки.
+Генерирует только DTF принт-файл А3 (без футболки, прозрачный фон).
+Мокап с футболкой создаётся локально через PIL.
 """
 import asyncio
 import json as _json
@@ -25,11 +26,11 @@ class AIGenerator:
         tshirt_color: str = "white",
         license_plate: str | None = None,
         custom_text: str | None = None,
-    ) -> tuple[bytes, bytes]:
+    ) -> bytes:
         """
-        Параллельно генерирует DTF принт-файл А3 и мокап футболки.
+        Генерирует DTF принт-файл А3 (только принт, без футболки, прозрачный фон).
 
-        Возвращает (dtf_bytes, mockup_bytes).
+        Возвращает dtf_bytes — PNG с прозрачным фоном.
         source_image_url — публичный URL для KIE.AI.
         tshirt_color     — 'white' или 'black'.
         license_plate    — гос. номер (введён пользователем, опционально).
@@ -43,15 +44,11 @@ class AIGenerator:
             raise AIGenerationError("KIE.AI: не передан source_image_url.")
 
         logger.info(
-            "Generating via KIE.AI (DTF + mockup), color={}, plate={}, text={}",
+            "Generating DTF via KIE.AI, color={}, plate={}, text={}",
             tshirt_color, license_plate, custom_text,
         )
 
-        dtf_task    = self._generate_kieai_dtf(source_image_url, tshirt_color, license_plate, custom_text)
-        mockup_task = self._generate_kieai_mockup(source_image_url, tshirt_color, license_plate, custom_text)
-
-        dtf_bytes, mockup_bytes = await asyncio.gather(dtf_task, mockup_task)
-        return dtf_bytes, mockup_bytes
+        return await self._generate_kieai_dtf(source_image_url, tshirt_color, license_plate, custom_text)
 
     # ------------------------------------------------------------------
     # Общий строительный блок промпта
@@ -148,53 +145,6 @@ class AIGenerator:
             aspect_ratio="3:4",
             resolution="2K",
             task_label="DTF",
-        )
-
-    # ------------------------------------------------------------------
-    # Мокап футболки
-    # ------------------------------------------------------------------
-
-    async def _generate_kieai_mockup(
-        self,
-        source_image_url: str,
-        tshirt_color: str = "white",
-        license_plate: str | None = None,
-        custom_text: str | None = None,
-    ) -> bytes:
-        """Генерирует фотореалистичный мокап футболки с принтом (3:4, 1K)."""
-        shirt_contrast, plate_instruction, text_instruction = self._build_car_prompt(
-            tshirt_color, license_plate, custom_text
-        )
-        color_ru = "чёрная" if tshirt_color == "black" else "белая"
-
-        prompt = (
-            f"Создай фотореалистичный мокап: {color_ru} футболка, вид спереди, "
-            "футболка аккуратно лежит на плоской поверхности или надета на манекен. "
-            "На груди футболки — яркий художественный принт с автомобилем с исходного фото. "
-            "Принт занимает большую часть груди и чётко виден.\n"
-
-            "Принт на футболке:\n"
-            "Центральный элемент принта — автомобиль, нарисованный как художественная иллюстрация: "
-            "жирные контуры, высокий контраст, кинематографическое освещение. "
-            "Сохрани точно марку, модель, цвет кузова, диски, фары, ракурс съёмки "
-            "и все детали точно как на исходном фото — без изменений и без тюнинга.\n"
-
-            f"{plate_instruction}\n"
-            f"{text_instruction}\n"
-            f"{shirt_contrast}\n"
-
-            "Футболка видна полностью от воротника до низа. "
-            "Фон — нейтральный белый или светло-серый. "
-            "Фотографическое качество мокапа, реалистичные складки ткани."
-        )
-
-        logger.debug("KIE.AI mockup prompt ({} chars)", len(prompt))
-        return await self._kieai_request(
-            source_image_url=source_image_url,
-            prompt=prompt,
-            aspect_ratio="3:4",
-            resolution="1K",
-            task_label="mockup",
         )
 
     # ------------------------------------------------------------------
