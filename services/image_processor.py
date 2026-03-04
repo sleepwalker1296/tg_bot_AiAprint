@@ -4,7 +4,7 @@
 import io
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 from loguru import logger
 
 import config
@@ -15,8 +15,8 @@ import config
 # Принт занимает 44 % ширины шаблона, центр по горизонтали — посередине,
 # центр по вертикали — 40 % от верха (грудь).
 _PRINT_CENTER_X = 0.50   # горизонтальный центр зоны принта
-_PRINT_CENTER_Y = 0.55   # вертикальный центр зоны принта (грудь)
-_PRINT_WIDTH_RATIO = 0.44  # ширина принта = 44 % ширины шаблона
+_PRINT_CENTER_Y = 0.60   # вертикальный центр зоны принта (немного ниже груди)
+_PRINT_WIDTH_RATIO = 0.38  # ширина принта = 38 % ширины шаблона (немного уже)
 # Соотношение сторон А3 portrait: 297 мм × 420 мм → высота = ширина × 420/297
 _A3_HEIGHT_RATIO = 420 / 297
 
@@ -120,26 +120,12 @@ class ImageProcessor:
         py = max(0, py)
 
         with Image.open(io.BytesIO(dtf_bytes)) as dtf_img:
-            dtf = dtf_img.convert("RGB")
+            dtf = dtf_img.convert("RGBA")
             dtf_scaled = dtf.resize((zone_w, zone_h), Image.LANCZOS)
 
-        # Вырезаем регион футболки под принтом
-        shirt_region = shirt.crop((px, py, px + zone_w, py + zone_h))
-
-        if shirt_color == "black":
-            # Screen blend: чёрный (#000) фон принта полностью исчезает,
-            # яркие цвета иллюстрации проявляются поверх тёмной ткани.
-            blended = ImageChops.screen(shirt_region, dtf_scaled)
-        else:
-            # Multiply blend: белый (#fff) фон принта полностью исчезает,
-            # тёмные цвета иллюстрации умножаются на светлую ткань.
-            blended = ImageChops.multiply(shirt_region, dtf_scaled)
-
-        # Маска с закруглёнными углами + мягкий край — убираем прямоугольный обрез
-        corner_radius = zone_w // 10
-        blend_mask = self._rounded_mask(zone_w, zone_h, corner_radius)
-        merged = Image.composite(blended, shirt_region, blend_mask)
-        shirt.paste(merged, (px, py))
+        # Наложение через альфа-канал PNG: прозрачный фон принта не затрагивает ткань,
+        # рисунок ложится поверх футболки без рамок и без блендинга по цвету.
+        shirt.paste(dtf_scaled, (px, py), dtf_scaled.split()[3])
         result = shirt
 
         # Уменьшаем до разумного размера для отправки
@@ -155,17 +141,6 @@ class ImageProcessor:
         buf.seek(0)
         logger.debug("Mockup created ({}×{}), {} bytes", result.width, result.height, buf.tell())
         return buf.getvalue()
-
-    @staticmethod
-    def _rounded_mask(width: int, height: int, radius: int) -> Image.Image:
-        """Маска с закруглёнными углами и размытым (мягким) краем."""
-        mask = Image.new("L", (width, height), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=radius, fill=255)
-        # Размываем край для плавного перехода в ткань
-        feather = max(4, radius // 3)
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))
-        return mask
 
     def _dtf_on_plain_bg(self, dtf_bytes: bytes, shirt_color: str) -> bytes:
         """Запасной вариант: принт на сплошном цветном фоне (если шаблон не найден)."""
