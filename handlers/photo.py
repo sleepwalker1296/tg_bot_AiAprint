@@ -275,6 +275,25 @@ async def _run_generation_pipeline(
             custom_text=custom_text,
         )
 
+        # ── Диагностика прозрачности DTF ───────────────────────────────────
+        import io as _io
+        from PIL import Image as _Image
+        _diag = _Image.open(_io.BytesIO(dtf_bytes))
+        logger.info("[DTF DIAG] mode={} size={}", _diag.mode, _diag.size)
+        logger.info("[DTF DIAG] extrema={}", _diag.getextrema())
+        if _diag.mode == "RGBA":
+            _alpha = _diag.split()[3]
+            _amin, _amax = _alpha.getextrema()
+            logger.info("[DTF DIAG] alpha min={} max={}", _amin, _amax)
+            if _amin > 0:
+                logger.warning("[DTF DIAG] ⚠️ фон НЕ полностью прозрачный (alpha min={})", _amin)
+            else:
+                logger.info("[DTF DIAG] ✅ фон прозрачный (alpha min=0)")
+        else:
+            logger.warning("[DTF DIAG] ⚠️ изображение без альфа-канала (mode={})", _diag.mode)
+        _diag.close()
+        # ───────────────────────────────────────────────────────────────────
+
         dtf_path = config.ORDERS_DIR / f"order_{order_id:05d}_design.png"
         _image_processor.save_dtf(dtf_bytes, dtf_path)
 
